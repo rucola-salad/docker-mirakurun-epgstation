@@ -1,0 +1,99 @@
+--- /mnt/data/epgwork/epgstation/source/client-src/components/video/VideoContainer.vue	2022-01-10 10:08:39.000000000 +0000
++++ /mnt/data/epgstation-jikkyo-live-patch/client/src/components/video/VideoContainer.vue	2026-08-31 10:48:27.527845367 +0000
+@@ -97,6 +97,16 @@
+                                     >
+                                         <v-icon>mdi-subtitles</v-icon>
+                                     </v-btn>
++                                    <v-btn
++                                        v-if="typeof jikkyoChannelId !== 'undefined' && isJikkyoAvailable === true"
++                                        icon
++                                        dark
++                                        class="jikkyo-icon"
++                                        v-bind:class="{ disabled: isJikkyoEnabled === false }"
++                                        v-on:click="switchJikkyo"
++                                    >
++                                        <v-icon>mdi-comment-text-outline</v-icon>
++                                    </v-btn>
+                                     <v-btn v-if="this.isEnabledPip === true" icon dark v-on:click="switchPip">
+                                         <v-icon>mdi-picture-in-picture-bottom-right</v-icon>
+                                     </v-btn>
+@@ -110,6 +120,13 @@
+                     </div>
+                 </transition>
+             </div>
++            <JikkyoOverlay
++                v-if="typeof jikkyoChannelId !== 'undefined'"
++                ref="jikkyo"
++                v-bind:channelId="jikkyoChannelId"
++                v-bind:enabled="isJikkyoEnabled"
++                v-on:availability="onJikkyoAvailability"
++            ></JikkyoOverlay>
+             <div class="video-wrap">
+                 <NormalVideo
+                     v-if="videoParam.type == 'Normal'"
+@@ -193,6 +210,7 @@
+ </template>
+ 
+ <script lang="ts">
++import JikkyoOverlay from '@/components/jikkyo/JikkyoOverlay.vue';
+ import BaseVideo from '@/components/video/BaseVideo';
+ import LiveHLSVideo from '@/components/video/LiveHLSVideo.vue';
+ import NormalVideo from '@/components/video/NormalVideo.vue';
+@@ -213,6 +231,7 @@
+ 
+ @Component({
+     components: {
++        JikkyoOverlay,
+         NormalVideo,
+         LiveHLSVideo,
+         RecordedStreamingVideo,
+@@ -225,6 +244,9 @@
+     public videoParam!: VideoParam.BaseVideoParam;
+ 
+     @Prop({ required: false })
++    public jikkyoChannelId: number | undefined;
++
++    @Prop({ required: false })
+     public isEnabledSpeedControl: boolean | undefined; // 速度調整が有効か
+ 
+     public isHideCursor: boolean = false;
+@@ -241,6 +263,8 @@
+     public currentTimeStr: string = '--:--';
+     public durationStr: string = '--:--';
+     public playbackRate: number = 1.0;
++    public isJikkyoEnabled: boolean = localStorage.getItem('epgstation-jikkyo-enabled') !== 'false';
++    public isJikkyoAvailable: boolean = false;
+ 
+     // 字幕状態 (表示用)
+     public isEnabledSubtitles: boolean = false;
+@@ -734,6 +758,21 @@
+         this.lastSeekedTime = new Date().getTime();
+     }
+ 
++    /**
++     * 実況表示切り替え
++     */
++    public switchJikkyo(): void {
++        this.isJikkyoEnabled = !this.isJikkyoEnabled;
++        localStorage.setItem('epgstation-jikkyo-enabled', this.isJikkyoEnabled ? 'true' : 'false');
++    }
++
++    /**
++     * 実況対応チャンネル判定結果
++     */
++    public onJikkyoAvailability(isAvailable: boolean): void {
++        this.isJikkyoAvailable = isAvailable;
++    }
++
+     // pip 切り替え
+     public switchPip(): void {
+         if (typeof this.$refs.video === 'undefined') {
+@@ -968,7 +1007,7 @@
+                     font-size: 12px
+                     user-select: none
+ 
+-                .subtitle-icon.disabled
++                .subtitle-icon.disabled, .jikkyo-icon.disabled
+                     opacity: 0.3
+ 
+         @media screen and (max-width: 420px)

@@ -1,0 +1,42 @@
+# Backups
+*.bak
+*.bak-*
+*.bak_*
+*.backup
+*-backup-*
+*-backup
+*.candidate
+
+# Logs
+*.log
+logs/
+
+# Build / generated
+node_modules/
+dist/
+build/
+cache/
+tmp/
+
+# EPGStation runtime/generated
+epgstation/thumbnail/*
+!epgstation/thumbnail/.gitkeep
+epgstation/cm-analyzer-data/
+
+# CM analyzer test/generated results
+result-jlse-*
+logo-auto-test/
+
+# Recordings / media
+# TypeScript source uses .ts; recording files are excluded by runtime paths
+*.m2ts
+*.mp4
+*.mkv
+
+# Archives
+*.tar.gz
+*.zip
+
+# Editor/OS
+.DS_Store
+Thumbs.db

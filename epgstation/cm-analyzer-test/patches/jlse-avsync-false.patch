@@ -1,0 +1,13 @@
+diff --git a/modules/join_logo_scp_trial/src/jlse.js b/modules/join_logo_scp_trial/src/jlse.js
+--- a/modules/join_logo_scp_trial/src/jlse.js
++++ b/modules/join_logo_scp_trial/src/jlse.js
+@@ -79,7 +79,7 @@
+ //FFIndex("${filename}")
+ //FFMpegSource2("${filename}", atrack=-1)`
+ `TSFilePath="${filename}"
+ LWLibavVideoSource(TSFilePath, repeat=true, dominance=1)
+-AudioDub(last,LWLibavAudioSource(TSFilePath, stream_index=${index}, av_sync=true))
++AudioDub(last,LWLibavAudioSource(TSFilePath, stream_index=${index}, av_sync=false))
+ `
+   );
+   return path;

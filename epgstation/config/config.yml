@@ -1,0 +1,268 @@
+port: 8888
+mirakurunPath: http://mirakurun:40772/
+
+# dbtype: sqlite
+# sqlite:
+#   extensions:
+#     - '/hoge/regexp.dylib'
+#   regexp: true
+
+dbtype: mysql
+mysql:
+    host: mysql
+    port: 3306
+    user: epgstation
+    password: epgstation
+    database: epgstation
+
+epgUpdateIntervalTime: 10
+
+conflictPriority: 1
+recPriority: 2
+
+recordedFormat: '%HALF_WIDTH_TITLE%_%YEAR%-%MONTH%-%DAY%_%HOUR%%MIN%'
+recordedFileExtension: .ts
+recorded:
+    - name: recorded
+      path: '%ROOT%/recorded'
+recordedTSDefaultDirectory: /tv/
+recordedEncodeDefaultDirectory: /temp/
+
+thumbnail: '%ROOT%/thumbnail'
+thumbnailSize: 480x270
+thumbnailPosition: 5
+
+ffmpeg: /opt/ffmpeg-7.0.2/bin/ffmpeg
+ffprobe: /opt/ffmpeg-7.0.2/bin/ffprobe
+
+recordingFinishCommand: '/usr/bin/env JIKKYO_AUTO=1 JIKKYO_DELAY=600 /bin/bash /app/config/jikkyo-fetch.sh'
+encodingFinishCommand: '/usr/bin/env JIKKYO_AUTO=1 /bin/bash /app/config/jikkyo-fetch.sh'
+
+encodeProcessNum: 4
+concurrentEncodeNum: 1
+encode:
+    - name: アニメ-720p-H264-VAAPI
+      cmd: '/bin/bash %ROOT%/config/anime-enc.sh'
+      suffix: -anime.mp4
+      rate: 2.0
+
+    - name: 一般-720p60-H264-VAAPI
+      cmd: '/bin/bash %ROOT%/config/general-720p-enc.sh'
+      suffix: -720p60.mp4
+      rate: 2.0
+
+    - name: 一般-1080p60-H264-VAAPI
+      cmd: '/bin/bash %ROOT%/config/general-1080p-enc.sh'
+      suffix: -1080p60.mp4
+      rate: 2.0
+
+    - name: H.264-SL
+      cmd: '%NODE% %ROOT%/config/sl-enc.js'
+      suffix: .mp4
+      rate: 4.0
+
+    # - name: M2
+    #  cmd: '/bin/bash %ROOT%/config/sl-enc-ml.sh 22 veryfast M2'
+    #  suffix: -M2.mp4
+    #  rate: 4.0
+
+    # - name: L1-24
+    #  cmd: '/bin/bash %ROOT%/config/sl-enc-ml.sh 24 veryfast L1'
+    #  suffix: -L1.mp4
+    #  rate: 4.0
+
+    # - name: L2
+    #  cmd: '/bin/bash %ROOT%/config/sl-enc-ml.sh 22 veryfast L2'
+    #  suffix: -L2.mp4
+    #  rate: 4.0
+
+urlscheme:
+    m2ts:
+        ios: vlc-x-callback://x-callback-url/stream?url=PROTOCOL://ADDRESS
+        android: intent://ADDRESS#Intent;package=org.videolan.vlc;type=video;scheme=PROTOCOL;end
+    video:
+        ios: infuse://x-callback-url/play?url=PROTOCOL://ADDRESS
+        android: intent://ADDRESS#Intent;package=com.mxtech.videoplayer.pro;type=video;scheme=PROTOCOL;end
+    download:
+        ios: vlc-x-callback://x-callback-url/download?url=PROTOCOL://ADDRESS&filename=FILENAME
+
+stream:
+    live:
+        ts:
+            m2ts:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high
+                      -y -f mpegts pipe:1'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high
+                      -y -f mpegts pipe:1'
+                - name: 無変換
+
+            webm:
+                - name: 720p
+                  cmd:
+                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 192k -ac
+                      2 -c:v libvpx-vp9 -vf yadif,scale=-2:720 -b:v 3000k -deadline realtime -speed 4 -cpu-used -8 -y -f
+                      webm pipe:1'
+                - name: 480p
+                  cmd:
+                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 2 -c:a libvorbis -ar 48000 -b:a 128k -ac
+                      2 -c:v libvpx-vp9 -vf yadif,scale=-2:480 -b:v 1500k -deadline realtime -speed 4 -cpu-used -8 -y -f
+                      webm pipe:1'
+
+            mp4:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+
+            hls:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 17 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -re -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 17 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
+
+    recorded:
+        ts:
+            webm:
+                - name: 720p
+                  cmd:
+                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 192k -ac 2
+                      -c:v libvpx-vp9 -vf yadif,scale=-2:720 -b:v 3000k -deadline realtime -speed 4 -cpu-used -8 -y -f
+                      webm pipe:1'
+                - name: 480p
+                  cmd:
+                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 128k -ac 2
+                      -c:v libvpx-vp9 -vf yadif,scale=-2:480 -b:v 1500k -deadline realtime -speed 4 -cpu-used -8 -y -f
+                      webm pipe:1'
+
+            mp4:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+
+            hls:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main
+                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
+
+        encoded:
+            webm:
+                - name: 720p
+                  cmd:
+                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 3 -c:a libvorbis -ar 48000 -b:a
+                      192k -ac 2 -c:v libvpx-vp9 -vf scale=-2:720 -b:v 3000k -deadline realtime -speed 4 -cpu-used -8 -y
+                      -f webm pipe:1'
+                - name: 480p
+                  cmd:
+                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 3 -c:a libvorbis -ar 48000 -b:a
+                      128k -ac 2 -c:v libvpx-vp9 -vf scale=-2:480 -b:v 1500k -deadline realtime -speed 4 -cpu-used -8 -y
+                      -f webm pipe:1'
+
+            mp4:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main -ss %SS%
+                      -vaapi_device /dev/dri/renderD128 -i %INPUT% -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main -ss %SS%
+                      -vaapi_device /dev/dri/renderD128 -i %INPUT% -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof
+                      -y -f mp4 pipe:1'
+
+            hls:
+                - name: 720p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main -ss %SS%
+                      -vaapi_device /dev/dri/renderD128 -i %INPUT% -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -vf format=nv12,hwupload,scale_vaapi=w=1280:h=720
+                      -c:v h264_vaapi -b:v 3000k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
+                - name: 480p
+                  cmd:
+                      '/app/config/ffmpeg-i965.sh -dual_mono_mode main -ss %SS%
+                      -vaapi_device /dev/dri/renderD128 -i %INPUT% -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -vf format=nv12,hwupload,scale_vaapi=w=854:h=480
+                      -c:v h264_vaapi -b:v 1500k -profile:v high -flags +loop-global_header
+                      -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
+                      -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments %OUTPUT%'
