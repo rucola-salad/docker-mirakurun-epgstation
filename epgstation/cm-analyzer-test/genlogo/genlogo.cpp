@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -974,6 +975,319 @@ static std::string shellQuote(const std::string& s) {
     return r;
 }
 
+struct AutoRoiComponent {
+    int minX;
+    int minY;
+    int maxX;
+    int maxY;
+    int pixels;
+    double persistenceSum;
+};
+
+struct AutoRoiResult {
+    int x = -1;
+    int y = -1;
+    int w = -1;
+    int h = -1;
+    double score = 0.0;
+};
+
+static bool getVideoSize(
+    const std::string& input,
+    int& width,
+    int& height)
+{
+    std::string cmd =
+        "ffprobe -v error "
+        "-select_streams v:0 "
+        "-show_entries stream=width,height "
+        "-of csv=p=0:s=x " +
+        shellQuote(input);
+
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp)
+        return false;
+
+    char buf[256] {};
+    std::string result;
+
+    if (fgets(buf, sizeof(buf), fp))
+        result = buf;
+
+    pclose(fp);
+
+    if (std::sscanf(
+            result.c_str(),
+            "%dx%d",
+            &width,
+            &height) != 2)
+        return false;
+
+    return width > 0 && height > 0;
+}
+
+static bool detectLogoRoi(
+    const std::string& input,
+    double fps,
+    int maxFrames,
+    int edgeThreshold,
+    double persistence,
+    AutoRoiResult& result)
+{
+    int sourceW = 0;
+    int sourceH = 0;
+
+    if (!getVideoSize(input, sourceW, sourceH)) {
+        std::cerr << "auto-roi: cannot determine video size\n";
+        return false;
+    }
+
+    // detect-logo-roi.cpp で検証済みの解析解像度。
+    const int W = 720;
+    const int H = 540;
+    const size_t frameSize = size_t(W) * size_t(H);
+
+    std::vector<uint8_t> frame(frameSize);
+    std::vector<unsigned short> edgeCount(frameSize, 0);
+
+    char fpsbuf[64];
+    std::snprintf(fpsbuf, sizeof(fpsbuf), "%.8f", fps);
+
+    std::string filter =
+        "fps=" + std::string(fpsbuf) +
+        ",scale=" + std::to_string(W) + ":" + std::to_string(H);
+
+    std::string cmd =
+        "ffmpeg -hide_banner -loglevel error -i " +
+        shellQuote(input) +
+        " -an -sn -dn -vf " +
+        shellQuote(filter) +
+        " -frames:v " + std::to_string(maxFrames) +
+        " -pix_fmt gray -f rawvideo -";
+
+    std::cerr
+        << "auto-roi source: " << sourceW << "x" << sourceH << "\n"
+        << "auto-roi analysis: " << W << "x" << H
+        << ", fps=" << fps
+        << ", maxFrames=" << maxFrames << "\n";
+
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) {
+        perror("popen");
+        return false;
+    }
+
+    int frames = 0;
+
+    while (frames < maxFrames) {
+        size_t got = fread(frame.data(), 1, frameSize, fp);
+        if (got == 0)
+            break;
+        if (got != frameSize) {
+            std::cerr << "auto-roi: short raw frame\n";
+            break;
+        }
+
+        for (int yy = 1; yy < H - 1; ++yy) {
+            for (int xx = 1; xx < W - 1; ++xx) {
+                size_t o = size_t(xx) + size_t(yy) * W;
+                int gx = std::abs(int(frame[o + 1]) - int(frame[o - 1]));
+                int gy = std::abs(int(frame[o + W]) - int(frame[o - W]));
+                if (gx + gy >= edgeThreshold)
+                    ++edgeCount[o];
+            }
+        }
+
+        ++frames;
+    }
+
+    pclose(fp);
+
+    if (frames < 10) {
+        std::cerr << "auto-roi: not enough frames: " << frames << "\n";
+        return false;
+    }
+
+    // 日本のテレビ局ウォーターマークを主対象として右上を探索。
+    const int searchX0 = int(W * 0.65);
+    const int searchX1 = W - 2;
+    const int searchY0 = 2;
+    const int searchY1 = int(H * 0.30);
+
+    const int minCount = std::max(
+        3,
+        int(std::ceil(frames * persistence))
+    );
+
+    std::vector<uint8_t> fixed(frameSize, 0);
+    int fixedPixels = 0;
+
+    for (int yy = searchY0; yy <= searchY1; ++yy) {
+        for (int xx = searchX0; xx <= searchX1; ++xx) {
+            size_t o = size_t(xx) + size_t(yy) * W;
+            if (edgeCount[o] >= minCount) {
+                fixed[o] = 1;
+                ++fixedPixels;
+            }
+        }
+    }
+
+    std::cerr
+        << "auto-roi frames=" << frames
+        << " fixedPixels=" << fixedPixels
+        << " minCount=" << minCount << "\n";
+
+    std::vector<uint8_t> dilated = fixed;
+    const int radius = 3;
+
+    for (int yy = searchY0; yy <= searchY1; ++yy) {
+        for (int xx = searchX0; xx <= searchX1; ++xx) {
+            size_t o = size_t(xx) + size_t(yy) * W;
+            if (!fixed[o])
+                continue;
+
+            for (int dy = -radius; dy <= radius; ++dy) {
+                int y2 = yy + dy;
+                if (y2 < searchY0 || y2 > searchY1)
+                    continue;
+
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    int x2 = xx + dx;
+                    if (x2 < searchX0 || x2 > searchX1)
+                        continue;
+                    dilated[size_t(x2) + size_t(y2) * W] = 1;
+                }
+            }
+        }
+    }
+
+    std::vector<uint8_t> visited(frameSize, 0);
+    AutoRoiComponent best {};
+    bool haveBest = false;
+    double bestScore = -1.0;
+
+    const int dirs[4][2] = {
+        { 1, 0 }, {-1, 0}, { 0, 1 }, { 0,-1 }
+    };
+
+    for (int sy = searchY0; sy <= searchY1; ++sy) {
+        for (int sx = searchX0; sx <= searchX1; ++sx) {
+            size_t so = size_t(sx) + size_t(sy) * W;
+            if (!dilated[so] || visited[so])
+                continue;
+
+            std::queue<std::pair<int,int>> q;
+            q.push({sx, sy});
+            visited[so] = 1;
+
+            AutoRoiComponent c {sx, sy, sx, sy, 0, 0.0};
+
+            while (!q.empty()) {
+                auto [xx, yy] = q.front();
+                q.pop();
+
+                c.minX = std::min(c.minX, xx);
+                c.maxX = std::max(c.maxX, xx);
+                c.minY = std::min(c.minY, yy);
+                c.maxY = std::max(c.maxY, yy);
+
+                size_t o = size_t(xx) + size_t(yy) * W;
+                if (fixed[o]) {
+                    ++c.pixels;
+                    c.persistenceSum += double(edgeCount[o]) / frames;
+                }
+
+                for (const auto& d : dirs) {
+                    int nx = xx + d[0];
+                    int ny = yy + d[1];
+                    if (nx < searchX0 || nx > searchX1 ||
+                        ny < searchY0 || ny > searchY1)
+                        continue;
+
+                    size_t no = size_t(nx) + size_t(ny) * W;
+                    if (visited[no] || !dilated[no])
+                        continue;
+
+                    visited[no] = 1;
+                    q.push({nx, ny});
+                }
+            }
+
+            if (c.pixels < 4)
+                continue;
+
+            int cw = c.maxX - c.minX + 1;
+            int ch = c.maxY - c.minY + 1;
+
+            if (cw < 4 || ch < 4)
+                continue;
+            if (cw > W * 0.25 || ch > H * 0.18)
+                continue;
+
+            double avgPersistence = c.persistenceSum / c.pixels;
+            double rightBonus = 1.0 + 0.25 * double(c.maxX) / W;
+            double topBonus = 1.0 + 0.15 * (1.0 - double(c.minY) / H);
+            double score =
+                c.pixels * avgPersistence * rightBonus * topBonus;
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+                haveBest = true;
+            }
+        }
+    }
+
+    if (!haveBest) {
+        std::cerr << "auto-roi: logo candidate not found\n";
+        return false;
+    }
+
+    int lx = std::max(searchX0, best.minX + radius - 5);
+    int ly = std::max(searchY0, best.minY + radius - 5);
+    int rx = std::min(W - 1, best.maxX - radius + 5);
+    int by = std::min(H - 1, best.maxY - radius + 5);
+
+    double scaleX = double(sourceW) / W;
+    double scaleY = double(sourceH) / H;
+
+    int x = int(std::floor(lx * scaleX));
+    int y = int(std::floor(ly * scaleY));
+    int w = int(std::ceil((rx - lx + 1) * scaleX));
+    int h = int(std::ceil((by - ly + 1) * scaleY));
+
+    x &= ~1;
+    y &= ~1;
+    w = (w + 1) & ~1;
+    h = (h + 1) & ~1;
+
+    if (x + w > sourceW)
+        w = (sourceW - x) & ~1;
+    if (y + h > sourceH)
+        h = (sourceH - y) & ~1;
+
+    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        std::cerr << "auto-roi: invalid detected ROI\n";
+        return false;
+    }
+
+    std::cerr
+        << "auto-roi candidate score=" << bestScore
+        << " detector=(" << best.minX << "," << best.minY << ")-("
+        << best.maxX << "," << best.maxY << ")\n"
+        << "auto-roi selected: x=" << x
+        << " y=" << y
+        << " w=" << w
+        << " h=" << h << "\n";
+
+    result.x = x;
+    result.y = y;
+    result.w = w;
+    result.h = h;
+    result.score = bestScore;
+    return true;
+}
+
 int main(int argc, char** argv) {
     std::string input;
     std::string output;
@@ -983,6 +1297,12 @@ int main(int argc, char** argv) {
     int threshold = 12;
     double fps = 0.2;
     int maxFrames = 500;
+
+    bool autoRoi = false;
+    double roiFps = 0.05;
+    int roiMaxFrames = 120;
+    int roiEdgeThreshold = 10;
+    double roiPersistence = 0.45;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -1005,19 +1325,66 @@ int main(int argc, char** argv) {
         else if (a == "--threshold") threshold = std::stoi(next());
         else if (a == "--fps") fps = std::stod(next());
         else if (a == "--max-frames") maxFrames = std::stoi(next());
+        else if (a == "--auto-roi") autoRoi = true;
+        else if (a == "--roi-fps") roiFps = std::stod(next());
+        else if (a == "--roi-max-frames") roiMaxFrames = std::stoi(next());
+        else if (a == "--roi-edge-threshold") roiEdgeThreshold = std::stoi(next());
+        else if (a == "--roi-persistence") roiPersistence = std::stod(next());
         else {
             std::cerr << "unknown option: " << a << "\n";
             return 2;
         }
     }
 
-    if (input.empty() || output.empty() ||
-        x < 0 || y < 0 || w <= 0 || h <= 0) {
+    if (input.empty() || output.empty()) {
         std::cerr
-            << "usage: genlogo -i INPUT -o OUTPUT "
-            << "--x X --y Y --w W --h H "
-            << "[--name CX] [--fps 0.2] "
-            << "[--threshold 12] [--max-frames 500]\n";
+            << "usage:\n"
+            << "  genlogo -i INPUT -o OUTPUT --x X --y Y --w W --h H "
+            << "[--name CX] [--fps 0.2] [--threshold 12] [--max-frames 500]\n"
+            << "  genlogo -i INPUT -o OUTPUT --auto-roi "
+            << "[--name CX] [--fps 0.2] [--threshold 12] [--max-frames 500] "
+            << "[--roi-fps 0.05] [--roi-max-frames 120] "
+            << "[--roi-edge-threshold 10] [--roi-persistence 0.45]\n";
+        return 2;
+    }
+
+    const bool manualRoiSpecified =
+        x >= 0 || y >= 0 || w > 0 || h > 0;
+
+    if (autoRoi && manualRoiSpecified) {
+        std::cerr
+            << "--auto-roi cannot be combined with --x/--y/--w/--h\n";
+        return 2;
+    }
+
+    if (autoRoi) {
+        if (roiFps <= 0.0 || roiMaxFrames <= 0 ||
+            roiEdgeThreshold < 0 ||
+            roiPersistence <= 0.0 || roiPersistence > 1.0) {
+            std::cerr << "invalid auto-roi parameters\n";
+            return 2;
+        }
+
+        AutoRoiResult roi;
+        if (!detectLogoRoi(
+                input,
+                roiFps,
+                roiMaxFrames,
+                roiEdgeThreshold,
+                roiPersistence,
+                roi)) {
+            std::cerr << "auto-roi detection failed\n";
+            return 4;
+        }
+
+        x = roi.x;
+        y = roi.y;
+        w = roi.w;
+        h = roi.h;
+    } else if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        std::cerr
+            << "manual ROI requires --x X --y Y --w W --h H; "
+            << "or use --auto-roi\n";
         return 2;
     }
 
@@ -1466,7 +1833,9 @@ int main(int argc, char** argv) {
 
     std::cerr << "created: " << output << "\n";
     std::cerr << "size: "
-              << (32 + 44 + pixels.size() * 12)
+              << (sizeof(LogoFileHeader) +
+                  sizeof(LogoHeader) +
+                  pixels.size() * sizeof(LogoPixel))
               << " bytes\n";
 
     return 0;
