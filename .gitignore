@@ -40,3 +40,12 @@ logo-auto-test/
 # Editor/OS
 .DS_Store
 Thumbs.db
+
+# EPGStation isolated test environment runtime data
+epgstation/test-env/data/
+epgstation/test-env/recorded/
+epgstation/test-env/thumbnail/
+
+# CM Analyzer generated test data
+epgstation/cm-analyzer-*-test-data-*/
+epgstation/cm-analyzer-*-test-*/
