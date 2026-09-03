@@ -27,6 +27,38 @@ const parseChannel =
 
 let running = false;
 let currentJob = null;
+const jobQueue = [];
+
+function enqueueAnalysis(job) {
+    jobQueue.push(job);
+
+    log(
+        'analysis queued',
+        `recordedId=${job.recordedId}`,
+        `queueLength=${jobQueue.length}`
+    );
+
+    processNextAnalysis();
+}
+
+function processNextAnalysis() {
+    if (running || jobQueue.length === 0) {
+        return;
+    }
+
+    const job = jobQueue.shift();
+
+    runAnalysis(job)
+        .catch(err => {
+            log(
+                'unexpected analysis error',
+                err
+            );
+        })
+        .finally(() => {
+            processNextAnalysis();
+        });
+}
 
 function log(...args) {
     console.log(
@@ -740,6 +772,11 @@ const server = http.createServer(
                 status: 'ok',
                 running,
                 currentJob,
+                queueLength: jobQueue.length,
+                queuedJobs: jobQueue.map(job => ({
+                    recordedId: job.recordedId,
+                    recPath: job.recPath,
+                })),
             });
             return;
         }
@@ -768,15 +805,6 @@ const server = http.createServer(
                 sendJson(res, 400, {
                     error:
                         'recordedId and recPath are required',
-                });
-                return;
-            }
-
-            if (running) {
-                sendJson(res, 409, {
-                    error:
-                        'analysis already running',
-                    currentJob,
                 });
                 return;
             }
@@ -818,14 +846,15 @@ const server = http.createServer(
                     String(body.title || ''),
             };
 
+            enqueueAnalysis(job);
+
             sendJson(res, 202, {
                 accepted: true,
                 recordedId:
                     job.recordedId,
-            });
-
-            setImmediate(() => {
-                runAnalysis(job);
+                running,
+                queueLength:
+                    jobQueue.length,
             });
 
             return;
