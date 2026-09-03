@@ -28,23 +28,11 @@ TITLE="${NAME:-}"
 log "recording finish start recordedId=${RECORDED_ID} recPath=${REC_PATH}"
 
 #
-# 既存の実況コメント取得
-#
-if [ -x /app/config/jikkyo-fetch.sh ]; then
-    log "jikkyo-fetch start recordedId=${RECORDED_ID}"
-    /app/config/jikkyo-fetch.sh
-    log "jikkyo-fetch finished recordedId=${RECORDED_ID}"
-else
-    log "jikkyo-fetch.sh not executable"
-fi
-
-#
 # CM解析要求
 #
 if [ -z "$RECORDED_ID" ] || [ -z "$REC_PATH" ]; then
     log "cm-analyzer skipped: RECORDEDID or RECPATH is empty"
-    exit 0
-fi
+else
 
 RECORDED_ID_JSON=$(json_escape "$RECORDED_ID")
 REC_PATH_JSON=$(json_escape "$REC_PATH")
@@ -61,7 +49,7 @@ BODY=$(cat <<JSON
 JSON
 )
 
-node - "$CM_ANALYZER_URL" "$BODY" >> "$LOG" 2>&1 <<'NODE' &
+node - "$CM_ANALYZER_URL" "$BODY" >> "$LOG" 2>&1 <<'NODE'
 const http = require('http');
 
 const url = new URL(process.argv[2]);
@@ -104,6 +92,18 @@ req.on('error', err => {
 req.end(body);
 NODE
 
-log "cm-analyzer request started recordedId=${RECORDED_ID}"
+log "cm-analyzer request finished recordedId=${RECORDED_ID}"
+fi
+
+#
+# 既存の実況コメント取得
+#
+if [ -x /app/config/jikkyo-fetch.sh ]; then
+    log "jikkyo-fetch start recordedId=${RECORDED_ID}"
+    /app/config/jikkyo-fetch.sh
+    log "jikkyo-fetch finished recordedId=${RECORDED_ID}"
+else
+    log "jikkyo-fetch.sh not executable"
+fi
 
 exit 0

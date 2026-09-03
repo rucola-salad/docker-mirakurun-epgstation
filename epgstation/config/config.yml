@@ -35,7 +35,7 @@ thumbnailPosition: 5
 ffmpeg: /opt/ffmpeg-7.0.2/bin/ffmpeg
 ffprobe: /opt/ffmpeg-7.0.2/bin/ffprobe
 
-recordingFinishCommand: '/usr/bin/env JIKKYO_AUTO=1 JIKKYO_DELAY=600 /bin/bash /app/config/jikkyo-fetch.sh'
+recordingFinishCommand: '/usr/bin/env JIKKYO_AUTO=1 JIKKYO_DELAY=600 /bin/bash /app/config/recording-finish.sh'
 encodingFinishCommand: '/usr/bin/env JIKKYO_AUTO=1 /bin/bash /app/config/jikkyo-fetch.sh'
 
 encodeProcessNum: 4
