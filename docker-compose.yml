@@ -81,10 +81,10 @@ services:
 
     cm-analyzer:
         container_name: cm-analyzer
-        image: cm-analyzer-test:service
+        image: cm-analyzer-test:logo-management-final
         volumes:
             - /etc/localtime:/etc/localtime:ro
-            - /media/tv_record:/recorded:ro
+            - ./epgstation/test-env/recorded:/recorded:ro
             - ./epgstation/cm-analyzer-data:/data
             - ./epgstation/cm-analyzer-data/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
             - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
