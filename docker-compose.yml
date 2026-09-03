@@ -86,7 +86,7 @@ services:
             - /etc/localtime:/etc/localtime:ro
             - /media/tv_record:/recorded:ro
             - ./epgstation/cm-analyzer-data:/data
-            - ./epgstation/cm-analyzer-test/logo-set:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo:ro
+            - ./epgstation/cm-analyzer-data/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
             - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
         environment:
             TZ: "Asia/Tokyo"
