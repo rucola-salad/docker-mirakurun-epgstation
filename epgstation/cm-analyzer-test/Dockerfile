@@ -37,6 +37,15 @@ RUN cd /tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial && \
     npm install && \
     npm link
 
+COPY genlogo/genlogo.cpp /tmp/genlogo.cpp
+
+RUN g++ \
+      -std=c++17 \
+      -O2 \
+      /tmp/genlogo.cpp \
+      -o /usr/local/bin/genlogo && \
+    chmod 0755 /usr/local/bin/genlogo
+
 WORKDIR /tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial
 
 COPY server.js /opt/cm-analyzer/server.js
