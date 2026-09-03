@@ -333,6 +333,55 @@
 
                         <v-divider></v-divider>
 
+                        <v-list-item>
+                            <v-list-item-content>
+                                <div class="title mb-3">CM解析ロゴ管理</div>
+
+                                <v-progress-linear v-if="isLoadingCmAnalyzerLogos" indeterminate></v-progress-linear>
+
+                                <div v-else-if="cmAnalyzerLogos.length === 0" class="text--secondary">CM解析ロゴはありません</div>
+
+                                <v-card v-for="logo in cmAnalyzerLogos" :key="logo.stationId" outlined class="mb-3">
+                                    <v-card-text>
+                                        <div class="d-flex flex-wrap align-center">
+                                            <div class="cm-logo-station">
+                                                <div class="subtitle-1 font-weight-bold">
+                                                    {{ logo.channelName || logo.stationId }}
+                                                </div>
+                                                <div v-if="logo.channelName" class="caption">
+                                                    {{ logo.stationId }}
+                                                </div>
+                                                <div class="caption">
+                                                    {{ getCmAnalyzerLogoStatus(logo) }}
+                                                </div>
+                                            </div>
+
+                                            <div class="cm-logo-preview mx-4">
+                                                <img :src="getCmAnalyzerLogoPreviewUrl(logo)" :alt="logo.stationId + ' logo'" />
+                                            </div>
+
+                                            <div class="cm-logo-info">
+                                                <div>
+                                                    品質:
+                                                    {{ getCmAnalyzerLogoQuality(logo) }}
+                                                </div>
+                                                <div>
+                                                    生成日時:
+                                                    {{ getCmAnalyzerLogoGeneratedAt(logo) }}
+                                                </div>
+                                            </div>
+
+                                            <v-spacer></v-spacer>
+
+                                            <v-btn text color="error" :disabled="isDeletingCmAnalyzerLogo" v-on:click="openCmAnalyzerLogoDeleteDialog(logo)">削除</v-btn>
+                                        </div>
+                                    </v-card-text>
+                                </v-card>
+                            </v-list-item-content>
+                        </v-list-item>
+
+                        <v-divider></v-divider>
+
                         <v-list-item three-line>
                             <v-list-item-content>
                                 <div class="title">ビデオプレーヤ</div>
@@ -357,6 +406,25 @@
                 </v-container>
             </div>
         </transition>
+        <v-dialog v-model="isCmAnalyzerLogoDeleteDialogOpen" max-width="360" persistent>
+            <v-card>
+                <v-card-text class="pa-4">
+                    <div class="text--primary">
+                        {{ cmAnalyzerLogoDeleteTarget ? cmAnalyzerLogoDeleteTarget.stationId : '' }}
+                        のCM解析ロゴを削除しますか？
+                    </div>
+                    <div class="caption mt-2">次回の録画解析時に新しいロゴが生成されます。</div>
+                </v-card-text>
+
+                <v-card-actions>
+                    <v-spacer></v-spacer>
+
+                    <v-btn color="primary" text :disabled="isDeletingCmAnalyzerLogo" v-on:click="closeCmAnalyzerLogoDeleteDialog">キャンセル</v-btn>
+
+                    <v-btn color="error" text :loading="isDeletingCmAnalyzerLogo" v-on:click="deleteCmAnalyzerLogo">削除</v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
     </v-main>
 </template>
 
@@ -364,6 +432,7 @@
 import TitleBar from '@/components/titleBar/TitleBar.vue';
 import * as apid from '../../../api';
 import IExtensionSettingsApiModel from '@/model/api/extensionSettings/IExtensionSettingsApiModel';
+import ICmAnalyzerApiModel, { ICmAnalyzerLogo } from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
 import container from '@/model/ModelContainer';
 import IScrollPositionState from '@/model/state/IScrollPositionState';
 import INavigationState from '@/model/state/navigation/INavigationState';
@@ -397,7 +466,14 @@ export default class Settings extends Vue {
         autoGenerateJikkyoXml: true,
     };
 
+    public cmAnalyzerLogos: ICmAnalyzerLogo[] = [];
+    public isLoadingCmAnalyzerLogos: boolean = false;
+    public isCmAnalyzerLogoDeleteDialogOpen: boolean = false;
+    public cmAnalyzerLogoDeleteTarget: ICmAnalyzerLogo | null = null;
+    public isDeletingCmAnalyzerLogo: boolean = false;
+
     private extensionSettingsApi = container.get<IExtensionSettingsApiModel>('IExtensionSettingsApiModel');
+    private cmAnalyzerApi = container.get<ICmAnalyzerApiModel>('ICmAnalyzerApiModel');
     private navigationState: INavigationState = container.get<INavigationState>('INavigationState');
     private scrollState: IScrollPositionState = container.get<IScrollPositionState>('IScrollPositionState');
     private snackbarState: ISnackbarState = container.get<ISnackbarState>('ISnackbarState');
@@ -481,6 +557,101 @@ export default class Settings extends Vue {
         }
     }
 
+    public getCmAnalyzerLogoStatus(logo: ICmAnalyzerLogo): string {
+        switch (logo.status) {
+            case 'good':
+                return '良好';
+            case 'improving':
+                return '改善中';
+            default:
+                return '未評価';
+        }
+    }
+
+    public getCmAnalyzerLogoQuality(logo: ICmAnalyzerLogo): string {
+        if (logo.qualityScore === null) {
+            return '－';
+        }
+
+        return `${logo.qualityScore.toFixed(2)} 点`;
+    }
+
+    public getCmAnalyzerLogoGeneratedAt(logo: ICmAnalyzerLogo): string {
+        if (logo.generatedAt === null) {
+            return '－';
+        }
+
+        return new Date(logo.generatedAt).toLocaleString();
+    }
+
+    public getCmAnalyzerLogoPreviewUrl(logo: ICmAnalyzerLogo): string {
+        return './api/cm-analyzer/logos/' + encodeURIComponent(logo.stationId) + '/preview';
+    }
+
+    public openCmAnalyzerLogoDeleteDialog(logo: ICmAnalyzerLogo): void {
+        this.cmAnalyzerLogoDeleteTarget = logo;
+        this.isCmAnalyzerLogoDeleteDialogOpen = true;
+    }
+
+    public closeCmAnalyzerLogoDeleteDialog(): void {
+        if (this.isDeletingCmAnalyzerLogo) {
+            return;
+        }
+
+        this.isCmAnalyzerLogoDeleteDialogOpen = false;
+        this.cmAnalyzerLogoDeleteTarget = null;
+    }
+
+    public async deleteCmAnalyzerLogo(): Promise<void> {
+        const target = this.cmAnalyzerLogoDeleteTarget;
+
+        if (target === null) {
+            return;
+        }
+
+        this.isDeletingCmAnalyzerLogo = true;
+
+        try {
+            await this.cmAnalyzerApi.deleteLogo(target.stationId);
+
+            this.isCmAnalyzerLogoDeleteDialogOpen = false;
+            this.cmAnalyzerLogoDeleteTarget = null;
+
+            await this.loadCmAnalyzerLogos();
+
+            this.snackbarState.open({
+                text: `${target.stationId} のCM解析ロゴを削除しました`,
+                color: 'success',
+            });
+        } catch (err) {
+            this.snackbarState.open({
+                text: `${target.stationId} のCM解析ロゴ削除に失敗しました`,
+                color: 'error',
+            });
+
+            console.error(err);
+        } finally {
+            this.isDeletingCmAnalyzerLogo = false;
+        }
+    }
+
+    private async loadCmAnalyzerLogos(): Promise<void> {
+        this.isLoadingCmAnalyzerLogos = true;
+
+        try {
+            this.cmAnalyzerLogos = await this.cmAnalyzerApi.getLogos();
+        } catch (err) {
+            this.cmAnalyzerLogos = [];
+
+            this.snackbarState.open({
+                text: 'CM解析ロゴの読み込みに失敗しました',
+                color: 'error',
+            });
+        } finally {
+            this.isLoadingCmAnalyzerLogos = false;
+        }
+    }
+
     public beforeDestroy(): void {
         this.isShow = false;
     }
@@ -535,6 +706,8 @@ export default class Settings extends Vue {
                 });
             }
 
+            await this.loadCmAnalyzerLogos();
+
             this.isShow = true;
 
             this.$nextTick(async () => {
@@ -551,6 +724,17 @@ export default class Settings extends Vue {
     max-width: 100px
 .guide-time
     max-width: 70px
+.cm-logo-station
+    min-width: 80px
+.cm-logo-preview
+    min-width: 180px
+    text-align: center
+.cm-logo-preview img
+    max-width: 180px
+    max-height: 70px
+    image-rendering: auto
+.cm-logo-info
+    min-width: 220px
 </style>
 
 <style lang="sass">

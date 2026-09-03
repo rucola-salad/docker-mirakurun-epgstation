@@ -1,6 +1,8 @@
 import { Container } from 'inversify';
 import ChannelsApiModel from './api/channels/ChannelsApiModel';
 import IChannelsApiModel from './api/channels/IChannelsApiModel';
+import CmAnalyzerApiModel from './api/cmAnalyzer/CmAnalyzerApiModel';
+import ICmAnalyzerApiModel from './api/cmAnalyzer/ICmAnalyzerApiModel';
 import ConfigApiModel from './api/config/ConfigApiModel';
 import ExtensionSettingsApiModel from './api/extensionSettings/ExtensionSettingsApiModel';
 import IExtensionSettingsApiModel from './api/extensionSettings/IExtensionSettingsApiModel';
@@ -137,6 +139,8 @@ export default (container: Container): void => {
     container.bind<IRepositoryModel>('IRepositoryModel').to(RepositoryModel).inSingletonScope();
 
     container.bind<IConfigApiModel>('IConfigApiModel').to(ConfigApiModel).inSingletonScope();
+
+    container.bind<ICmAnalyzerApiModel>('ICmAnalyzerApiModel').to(CmAnalyzerApiModel).inSingletonScope();
 
     container.bind<IExtensionSettingsApiModel>('IExtensionSettingsApiModel').to(ExtensionSettingsApiModel).inSingletonScope();
 

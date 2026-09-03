@@ -1026,6 +1026,37 @@ static bool getVideoSize(
     return width > 0 && height > 0;
 }
 
+static bool getVideoDuration(
+    const std::string& input,
+    double& duration)
+{
+    std::string cmd =
+        "ffprobe -v error "
+        "-show_entries format=duration "
+        "-of default=noprint_wrappers=1:nokey=1 " +
+        shellQuote(input);
+
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp)
+        return false;
+
+    char buf[256] {};
+    std::string result;
+
+    if (fgets(buf, sizeof(buf), fp))
+        result = buf;
+
+    pclose(fp);
+
+    try {
+        duration = std::stod(result);
+    } catch (...) {
+        return false;
+    }
+
+    return std::isfinite(duration) && duration > 0.0;
+}
+
 static bool detectLogoRoi(
     const std::string& input,
     double fps,
@@ -1288,6 +1319,161 @@ static bool detectLogoRoi(
     return true;
 }
 
+
+static int writeLogoPreview(
+    const std::string& input,
+    const std::string& output)
+{
+    std::ifstream ifs(input, std::ios::binary);
+    if (!ifs) {
+        std::cerr
+            << "cannot open logo input: "
+            << input << "\n";
+        return 1;
+    }
+
+    LogoFileHeader fh {};
+    LogoHeader lh {};
+
+    ifs.read(
+        reinterpret_cast<char*>(&fh),
+        sizeof(fh)
+    );
+    ifs.read(
+        reinterpret_cast<char*>(&lh),
+        sizeof(lh)
+    );
+
+    if (!ifs) {
+        std::cerr
+            << "invalid logo file: header is too short\n";
+        return 1;
+    }
+
+    const char magic[] =
+        "<logo data file ver0.1>";
+
+    if (std::memcmp(
+            fh.magic,
+            magic,
+            sizeof(magic) - 1) != 0) {
+        std::cerr
+            << "invalid logo file: bad magic\n";
+        return 1;
+    }
+
+    const int w = int(lh.w);
+    const int h = int(lh.h);
+
+    if (
+        w <= 0 ||
+        h <= 0 ||
+        w > 4096 ||
+        h > 4096
+    ) {
+        std::cerr
+            << "invalid logo size: "
+            << w << "x" << h << "\n";
+        return 1;
+    }
+
+    const size_t pixelCount =
+        size_t(w) * size_t(h);
+
+    std::vector<LogoPixel> pixels(
+        pixelCount
+    );
+
+    ifs.read(
+        reinterpret_cast<char*>(
+            pixels.data()
+        ),
+        pixels.size() *
+            sizeof(LogoPixel)
+    );
+
+    if (!ifs) {
+        std::cerr
+            << "invalid logo file: pixel data is too short\n";
+        return 1;
+    }
+
+    std::ofstream fileOutput;
+    std::ostream* out = nullptr;
+
+    if (output == "-") {
+        out = &std::cout;
+    } else {
+        fileOutput.open(
+            output,
+            std::ios::binary
+        );
+
+        if (!fileOutput) {
+            std::cerr
+                << "cannot open preview output: "
+                << output << "\n";
+            return 1;
+        }
+
+        out = &fileOutput;
+    }
+
+    (*out)
+        << "P5\n"
+        << w << " " << h << "\n"
+        << "255\n";
+
+    for (const LogoPixel& p : pixels) {
+        int alpha = int(p.dp_y);
+
+        if (alpha < 0) {
+            alpha = 0;
+        } else if (alpha > 1000) {
+            alpha = 1000;
+        }
+
+        const unsigned char gray =
+            static_cast<unsigned char>(
+                (alpha * 255 + 500) /
+                1000
+            );
+
+        out->write(
+            reinterpret_cast<
+                const char*
+            >(&gray),
+            1
+        );
+    }
+
+    if (!(*out)) {
+        std::cerr
+            << "failed to write preview: "
+            << output << "\n";
+        return 1;
+    }
+
+    std::cerr
+        << "preview created: "
+        << output << "\n";
+
+    std::cerr
+        << "logo name: "
+        << lh.name << "\n";
+
+    std::cerr
+        << "logo position: "
+        << lh.x << ","
+        << lh.y << "\n";
+
+    std::cerr
+        << "logo size: "
+        << w << "x" << h << "\n";
+
+    return 0;
+}
+
 int main(int argc, char** argv) {
     std::string input;
     std::string output;
@@ -1299,6 +1485,7 @@ int main(int argc, char** argv) {
     int maxFrames = 500;
 
     bool autoRoi = false;
+    bool previewMode = false;
     double roiFps = 0.05;
     int roiMaxFrames = 120;
     int roiEdgeThreshold = 10;
@@ -1315,7 +1502,11 @@ int main(int argc, char** argv) {
             return argv[i];
         };
 
-        if (a == "-i") input = next();
+        if (a == "--preview") {
+            previewMode = true;
+            input = next();
+        }
+        else if (a == "-i") input = next();
         else if (a == "-o") output = next();
         else if (a == "--name") name = next();
         else if (a == "--x") x = std::stoi(next());
@@ -1339,6 +1530,8 @@ int main(int argc, char** argv) {
     if (input.empty() || output.empty()) {
         std::cerr
             << "usage:\n"
+            << "  genlogo --preview INPUT.lgd -o OUTPUT.pgm\n"
+            << "  genlogo --preview INPUT.lgd -o -  # PGM to stdout\n"
             << "  genlogo -i INPUT -o OUTPUT --x X --y Y --w W --h H "
             << "[--name CX] [--fps 0.2] [--threshold 12] [--max-frames 500]\n"
             << "  genlogo -i INPUT -o OUTPUT --auto-roi "
@@ -1348,8 +1541,44 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (previewMode) {
+        return writeLogoPreview(
+            input,
+            output
+        );
+    }
+
     const bool manualRoiSpecified =
         x >= 0 || y >= 0 || w > 0 || h > 0;
+
+    double videoDuration = 0.0;
+    if (getVideoDuration(input, videoDuration)) {
+        std::cerr
+            << "video duration: "
+            << videoDuration
+            << " sec\n";
+
+        // 短時間録画では固定fpsだと解析フレームが不足するため、
+        // 最大60フレーム程度を動画全体から均等に取得する。
+        if (videoDuration <= 120.0) {
+            const double shortVideoFps =
+                std::min(1.0, 60.0 / videoDuration);
+
+            roiFps = std::max(roiFps, shortVideoFps);
+            fps = std::max(fps, shortVideoFps);
+
+            std::cerr
+                << "short-video sampling: roiFps="
+                << roiFps
+                << ", fps="
+                << fps
+                << "\n";
+        }
+    } else {
+        std::cerr
+            << "warning: cannot determine video duration; "
+            << "using default sampling rates\n";
+    }
 
     if (autoRoi && manualRoiSpecified) {
         std::cerr

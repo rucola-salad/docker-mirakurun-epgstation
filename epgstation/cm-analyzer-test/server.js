@@ -20,7 +20,12 @@ const LOGO_ROOT =
     path.join(DATA_ROOT, 'logos');
 
 const GENLOGO_COMMAND =
+    process.env.GENLOGO_COMMAND ||
     '/usr/local/bin/genlogo';
+
+const FFMPEG_COMMAND =
+    process.env.FFMPEG_COMMAND ||
+    'ffmpeg';
 
 const parseChannel =
     require(path.join(JLSE_ROOT, 'src/channel')).parse;
@@ -169,6 +174,187 @@ function spawnAndWait(command, args, options = {}) {
     });
 }
 
+
+function spawnAndCapture(command, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(
+            command,
+            args,
+            {
+                ...options,
+                stdio: [
+                    'ignore',
+                    'pipe',
+                    'pipe',
+                ],
+            }
+        );
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', chunk => {
+            const text = chunk.toString();
+            stdout += text;
+            process.stdout.write(text);
+        });
+
+        child.stderr.on('data', chunk => {
+            const text = chunk.toString();
+            stderr += text;
+            process.stderr.write(text);
+        });
+
+        child.once('error', reject);
+
+        child.once('exit', (code, signal) => {
+            if (code === 0) {
+                resolve({
+                    stdout,
+                    stderr,
+                });
+                return;
+            }
+
+            reject(
+                new Error(
+                    `${command} failed: ` +
+                    `exit=${code} signal=${signal || ''}`
+                )
+            );
+        });
+    });
+}
+
+function collectMatches(text, regex) {
+    const matches = [];
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        matches.push(match);
+    }
+
+    return matches;
+}
+
+function parseLogoQuality(stderr) {
+    const roiMatches = collectMatches(
+        stderr,
+        /auto-roi candidate score=([0-9.]+)/g
+    );
+
+    const acceptedMatches = collectMatches(
+        stderr,
+        /^accepted frames:\s*(\d+)\s*$/gm
+    );
+
+    const evaluatorMatches = collectMatches(
+        stderr,
+        /logo evaluator mask:\s*(\d+) pixels, blackScore=([0-9.]+)/g
+    );
+
+    if (
+        roiMatches.length === 0 ||
+        acceptedMatches.length === 0 ||
+        evaluatorMatches.length === 0
+    ) {
+        throw new Error(
+            'genlogo quality metrics not found'
+        );
+    }
+
+    const roiScore = Number(
+        roiMatches[roiMatches.length - 1][1]
+    );
+
+    const acceptedFrames = Number(
+        acceptedMatches[acceptedMatches.length - 1][1]
+    );
+
+    const evaluator =
+        evaluatorMatches[evaluatorMatches.length - 1];
+
+    const maskPixels =
+        Number(evaluator[1]);
+
+    const blackScore =
+        Number(evaluator[2]);
+
+    const blackRatio =
+        maskPixels > 0
+            ? blackScore / maskPixels
+            : 0;
+
+    /*
+     * 比較用 0～100 点。
+     *
+     * ROI        40点
+     * accepted   30点
+     * blackRatio 30点
+     */
+    const roiPart =
+        Math.min(
+            Math.max(roiScore / 450, 0),
+            1
+        ) * 40;
+
+    const framePart =
+        Math.min(
+            Math.max(acceptedFrames / 60, 0),
+            1
+        ) * 30;
+
+    const blackPart =
+        Math.min(
+            Math.max(
+                (blackRatio - 0.90) / 0.10,
+                0
+            ),
+            1
+        ) * 30;
+
+    return {
+        roiScore,
+        acceptedFrames,
+        maskPixels,
+        blackScore,
+        blackRatio,
+        qualityScore:
+            roiPart +
+            framePart +
+            blackPart,
+    };
+}
+
+function readLogoQuality(metaPath) {
+    try {
+        const value = JSON.parse(
+            fs.readFileSync(
+                metaPath,
+                'utf8'
+            )
+        );
+
+        if (
+            typeof value.qualityScore !==
+            'number'
+        ) {
+            return null;
+        }
+
+        return value;
+    } catch (err) {
+        return null;
+    }
+}
+
+function isHighQualityLogo(quality) {
+    return (
+        quality &&
+        quality.qualityScore >= 90
+    );
+}
+
 function isUsableFile(filePath) {
     try {
         const stat = fs.statSync(filePath);
@@ -189,14 +375,17 @@ function validateStationId(stationId) {
         );
     }
 
-    if (/[/\\\x00]/.test(stationId)) {
+    if (!/^[A-Za-z0-9_-]+$/.test(stationId)) {
         throw new Error(
             `invalid station id: ${stationId}`
         );
     }
 }
 
-async function prepareLogo(workInput) {
+async function prepareLogo(
+    workInput,
+    channelName
+) {
     const channel = parseChannel(workInput);
 
     if (!channel || !channel.short) {
@@ -221,10 +410,50 @@ async function prepareLogo(workInput) {
             `${stationId}.lgd`
         );
 
-    if (isUsableFile(logoPath)) {
+    const metaPath =
+        path.join(
+            LOGO_ROOT,
+            `${stationId}.lgd.meta.json`
+        );
+
+    const existingLogo =
+        isUsableFile(logoPath);
+
+    const existingQuality =
+        readLogoQuality(metaPath);
+
+    /*
+     * 既に十分高品質ならgenlogoを実行しない。
+     */
+    if (
+        existingLogo &&
+        isHighQualityLogo(existingQuality)
+    ) {
+        if (
+            channelName &&
+            (
+                typeof existingQuality.channelName !== 'string' ||
+                existingQuality.channelName.length === 0
+            )
+        ) {
+            existingQuality.channelName =
+                String(channelName);
+
+            fs.writeFileSync(
+                metaPath,
+                JSON.stringify(
+                    existingQuality,
+                    null,
+                    2
+                ) + '\n',
+                'utf8'
+            );
+        }
+
         log(
-            'logo cache hit',
+            'logo cache hit high quality',
             `station=${stationId}`,
+            `quality=${existingQuality.qualityScore.toFixed(2)}`,
             `path=${logoPath}`
         );
 
@@ -235,71 +464,170 @@ async function prepareLogo(workInput) {
         };
     }
 
-    const tempLogoPath =
+    /*
+     * 正式LGDへ直接書かず、一時候補として生成する。
+     */
+    const candidateLogoPath =
         path.join(
-            LOGO_ROOT,
-            `.${stationId}.${process.pid}.${Date.now()}.tmp.lgd`
+            '/tmp',
+            `genlogo-${stationId}-${process.pid}-${Date.now()}.lgd`
         );
 
     log(
         'logo generation start',
         `station=${stationId}`,
+        existingQuality
+            ? `currentQuality=${existingQuality.qualityScore.toFixed(2)}`
+            : 'currentQuality=unknown',
         `input=${workInput}`
     );
 
     try {
-        await spawnAndWait(
-            GENLOGO_COMMAND,
-            [
-                '-i',
-                workInput,
-                '-o',
-                tempLogoPath,
-                '--auto-roi',
-                '--name',
-                stationId,
-            ],
-            {
-                stdio: [
-                    'ignore',
-                    'inherit',
-                    'inherit',
-                ],
-            }
-        );
+        const result =
+            await spawnAndCapture(
+                GENLOGO_COMMAND,
+                [
+                    '-i',
+                    workInput,
+                    '-o',
+                    candidateLogoPath,
+                    '--auto-roi',
+                    '--name',
+                    stationId,
+                ]
+            );
 
-        if (!isUsableFile(tempLogoPath)) {
+        if (!isUsableFile(candidateLogoPath)) {
             throw new Error(
-                `generated logo is invalid: ${tempLogoPath}`
+                `generated logo is invalid: ${candidateLogoPath}`
             );
         }
 
-        fs.renameSync(
-            tempLogoPath,
-            logoPath
+        const candidateQuality =
+            parseLogoQuality(
+                result.stderr
+            );
+
+        candidateQuality.stationId =
+            stationId;
+
+        candidateQuality.channelName =
+            String(channelName || '');
+
+        candidateQuality.generatedAt =
+            new Date().toISOString();
+
+        log(
+            'logo candidate quality',
+            `station=${stationId}`,
+            `quality=${candidateQuality.qualityScore.toFixed(2)}`,
+            `roi=${candidateQuality.roiScore}`,
+            `accepted=${candidateQuality.acceptedFrames}`,
+            `blackRatio=${candidateQuality.blackRatio.toFixed(4)}`
         );
+
+        let promote = false;
+        let reason = '';
+
+        if (!existingLogo) {
+            promote = true;
+            reason = 'no-existing-logo';
+        } else if (!existingQuality) {
+            /*
+             * 品質情報のない旧LGDは保守的に扱う。
+             * 新候補が十分高品質な場合だけ更新する。
+             */
+            promote =
+                isHighQualityLogo(
+                    candidateQuality
+                );
+
+            reason =
+                promote
+                    ? 'legacy-logo-high-quality-candidate'
+                    : 'legacy-logo-kept';
+        } else if (
+            candidateQuality.qualityScore >
+            existingQuality.qualityScore
+        ) {
+            promote = true;
+            reason = 'better-quality';
+        } else {
+            reason = 'existing-quality-better';
+        }
+
+        if (promote) {
+            /*
+             * copyFileSyncなので既存LGDは候補が
+             * 正常生成・品質評価された後にだけ更新される。
+             */
+            fs.copyFileSync(
+                candidateLogoPath,
+                logoPath
+            );
+
+            fs.writeFileSync(
+                metaPath,
+                JSON.stringify(
+                    candidateQuality,
+                    null,
+                    2
+                ) + '\n',
+                'utf8'
+            );
+
+            log(
+                'logo promoted',
+                `station=${stationId}`,
+                `quality=${candidateQuality.qualityScore.toFixed(2)}`,
+                `reason=${reason}`,
+                `path=${logoPath}`
+            );
+        } else {
+            log(
+                'logo candidate not promoted',
+                `station=${stationId}`,
+                `quality=${candidateQuality.qualityScore.toFixed(2)}`,
+                `reason=${reason}`
+            );
+        }
     } catch (err) {
         /*
-         * tempLogoPath is created only by this process.
-         * Do not touch an existing station logo on failure.
+         * 新候補生成失敗時も、
+         * 既存LGDがあればそれを維持する。
          */
-        if (fs.existsSync(tempLogoPath)) {
-            try {
-                fs.unlinkSync(tempLogoPath);
-            } catch (cleanupErr) {
-                log(
-                    'temporary logo cleanup failed',
-                    cleanupErr
-                );
-            }
+        if (existingLogo) {
+            log(
+                'logo generation failed; using existing logo',
+                `station=${stationId}`,
+                err
+            );
+
+            return {
+                stationId,
+                logoPath,
+                logoGenerated: false,
+            };
         }
 
         throw err;
     }
 
+    if (!isUsableFile(logoPath)) {
+        throw new Error(
+            `usable station logo is unavailable: ${logoPath}`
+        );
+    }
+
+    const finalQuality =
+        readLogoQuality(metaPath);
+
     log(
-        'logo generation finished',
+        'logo preparation finished',
         `station=${stationId}`,
+        finalQuality
+            ? `quality=${finalQuality.qualityScore.toFixed(2)}`
+            : 'quality=unknown',
         `path=${logoPath}`
     );
 
@@ -604,7 +932,10 @@ async function runAnalysis(job) {
         );
 
         const logo =
-            await prepareLogo(workInput);
+            await prepareLogo(
+                workInput,
+                job.channelName
+            );
 
         currentJob = {
             ...job,
@@ -762,8 +1093,470 @@ async function runAnalysis(job) {
     }
 }
 
+
+function createLogoPreviewPng(
+    logoPath
+) {
+    return new Promise(
+        (resolve, reject) => {
+            const spawn =
+                require('child_process').spawn;
+
+            const genlogo =
+                spawn(
+                    GENLOGO_COMMAND,
+                    [
+                        '--preview',
+                        logoPath,
+                        '-o',
+                        '-',
+                    ],
+                    {
+                        stdio: [
+                            'ignore',
+                            'pipe',
+                            'pipe',
+                        ],
+                    }
+                );
+
+            const ffmpeg =
+                spawn(
+                    FFMPEG_COMMAND,
+                    [
+                        '-hide_banner',
+                        '-loglevel',
+                        'error',
+                        '-f',
+                        'image2pipe',
+                        '-vcodec',
+                        'pgm',
+                        '-i',
+                        'pipe:0',
+                        '-frames:v',
+                        '1',
+                        '-f',
+                        'image2pipe',
+                        '-vcodec',
+                        'png',
+                        'pipe:1',
+                    ],
+                    {
+                        stdio: [
+                            'pipe',
+                            'pipe',
+                            'pipe',
+                        ],
+                    }
+                );
+
+            const pngChunks = [];
+            const genlogoErrors = [];
+            const ffmpegErrors = [];
+
+            let genlogoExit = null;
+            let ffmpegExit = null;
+            let settled = false;
+
+            const fail = err => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+
+                try {
+                    genlogo.kill();
+                } catch (_) {
+                    // ignore
+                }
+
+                try {
+                    ffmpeg.kill();
+                } catch (_) {
+                    // ignore
+                }
+
+                reject(err);
+            };
+
+            const finish = () => {
+                if (
+                    settled ||
+                    genlogoExit === null ||
+                    ffmpegExit === null
+                ) {
+                    return;
+                }
+
+                if (genlogoExit !== 0) {
+                    fail(
+                        new Error(
+                            'genlogo preview failed: ' +
+                            Buffer.concat(
+                                genlogoErrors
+                            ).toString('utf8')
+                        )
+                    );
+                    return;
+                }
+
+                if (ffmpegExit !== 0) {
+                    fail(
+                        new Error(
+                            'ffmpeg preview failed: ' +
+                            Buffer.concat(
+                                ffmpegErrors
+                            ).toString('utf8')
+                        )
+                    );
+                    return;
+                }
+
+                const png =
+                    Buffer.concat(
+                        pngChunks
+                    );
+
+                if (png.length === 0) {
+                    fail(
+                        new Error(
+                            'preview png is empty'
+                        )
+                    );
+                    return;
+                }
+
+                settled = true;
+                resolve(png);
+            };
+
+            genlogo.stdout.pipe(
+                ffmpeg.stdin
+            );
+
+            genlogo.stderr.on(
+                'data',
+                chunk => {
+                    genlogoErrors.push(
+                        Buffer.from(chunk)
+                    );
+                }
+            );
+
+            ffmpeg.stdout.on(
+                'data',
+                chunk => {
+                    pngChunks.push(
+                        Buffer.from(chunk)
+                    );
+                }
+            );
+
+            ffmpeg.stderr.on(
+                'data',
+                chunk => {
+                    ffmpegErrors.push(
+                        Buffer.from(chunk)
+                    );
+                }
+            );
+
+            genlogo.on(
+                'error',
+                fail
+            );
+
+            ffmpeg.on(
+                'error',
+                fail
+            );
+
+            genlogo.on(
+                'close',
+                code => {
+                    genlogoExit = code;
+                    finish();
+                }
+            );
+
+            ffmpeg.on(
+                'close',
+                code => {
+                    ffmpegExit = code;
+                    finish();
+                }
+            );
+        }
+    );
+}
+
+
+function listLogos() {
+    if (!fs.existsSync(LOGO_ROOT)) {
+        return [];
+    }
+
+    const result = [];
+
+    for (const name of fs.readdirSync(LOGO_ROOT)) {
+        if (!name.endsWith('.lgd')) {
+            continue;
+        }
+
+        const stationId =
+            name.substring(
+                0,
+                name.length - '.lgd'.length
+            );
+
+        if (
+            !/^[A-Za-z0-9_-]+$/.test(
+                stationId
+            )
+        ) {
+            continue;
+        }
+
+        const logoPath =
+            path.join(
+                LOGO_ROOT,
+                name
+            );
+
+        if (!isUsableFile(logoPath)) {
+            continue;
+        }
+
+        const metaPath =
+            path.join(
+                LOGO_ROOT,
+                `${stationId}.lgd.meta.json`
+            );
+
+        const quality =
+            readLogoQuality(metaPath);
+
+        result.push({
+            stationId,
+            channelName:
+                quality &&
+                typeof quality.channelName === 'string' &&
+                quality.channelName.length > 0
+                    ? quality.channelName
+                    : null,
+            qualityScore:
+                quality
+                    ? quality.qualityScore
+                    : null,
+            generatedAt:
+                quality &&
+                typeof quality.generatedAt === 'string'
+                    ? quality.generatedAt
+                    : null,
+            hasMeta:
+                quality !== null,
+            status:
+                quality === null
+                    ? 'unknown'
+                    : isHighQualityLogo(quality)
+                        ? 'good'
+                        : 'improving',
+        });
+    }
+
+    result.sort(
+        (a, b) =>
+            a.stationId.localeCompare(
+                b.stationId
+            )
+    );
+
+    return result;
+}
+
 const server = http.createServer(
     async (req, res) => {
+        const logoDeleteMatch =
+            req.method === 'DELETE'
+                ? req.url.match(
+                    /^\/logos\/([A-Za-z0-9_-]+)$/
+                )
+                : null;
+
+        const logoPreviewMatch =
+            req.method === 'GET'
+                ? req.url.match(
+                    /^\/logos\/([A-Za-z0-9_-]+)\/preview$/
+                )
+                : null;
+
+        if (logoDeleteMatch) {
+            const stationId =
+                logoDeleteMatch[1];
+
+            const logoPath =
+                path.join(
+                    LOGO_ROOT,
+                    `${stationId}.lgd`
+                );
+
+            const metaPath =
+                path.join(
+                    LOGO_ROOT,
+                    `${stationId}.lgd.meta.json`
+                );
+
+            if (!isUsableFile(logoPath)) {
+                sendJson(
+                    res,
+                    404,
+                    {
+                        error:
+                            'logo not found',
+                    }
+                );
+                return;
+            }
+
+            try {
+                /*
+                 * metaを先に削除する。
+                 * LGD削除に失敗しても、残ったLGDは
+                 * legacy（未評価）ロゴとして安全に扱える。
+                 */
+                if (fs.existsSync(metaPath)) {
+                    fs.unlinkSync(metaPath);
+                }
+
+                fs.unlinkSync(logoPath);
+
+                log(
+                    'logo deleted',
+                    stationId
+                );
+
+                sendJson(
+                    res,
+                    200,
+                    {
+                        deleted: true,
+                        stationId,
+                    }
+                );
+            } catch (err) {
+                log(
+                    'logo delete failed',
+                    stationId,
+                    err
+                );
+
+                sendJson(
+                    res,
+                    500,
+                    {
+                        error:
+                            'failed to delete logo',
+                    }
+                );
+            }
+
+            return;
+        }
+
+        if (logoPreviewMatch) {
+            const stationId =
+                logoPreviewMatch[1];
+
+            const logoPath =
+                path.join(
+                    LOGO_ROOT,
+                    `${stationId}.lgd`
+                );
+
+            if (!isUsableFile(logoPath)) {
+                sendJson(
+                    res,
+                    404,
+                    {
+                        error:
+                            'logo not found',
+                    }
+                );
+                return;
+            }
+
+            try {
+                const png =
+                    await createLogoPreviewPng(
+                        logoPath
+                    );
+
+                res.writeHead(
+                    200,
+                    {
+                        'Content-Type':
+                            'image/png',
+                        'Content-Length':
+                            png.length,
+                        'Cache-Control':
+                            'no-store',
+                    }
+                );
+
+                res.end(png);
+            } catch (err) {
+                log(
+                    'logo preview failed',
+                    stationId,
+                    err
+                );
+
+                sendJson(
+                    res,
+                    500,
+                    {
+                        error:
+                            'failed to create logo preview',
+                    }
+                );
+            }
+
+            return;
+        }
+
+        if (
+            req.method === 'GET' &&
+            req.url === '/logos'
+        ) {
+            try {
+                sendJson(
+                    res,
+                    200,
+                    {
+                        logos:
+                            listLogos(),
+                    }
+                );
+            } catch (err) {
+                log(
+                    'logo list failed',
+                    err
+                );
+
+                sendJson(
+                    res,
+                    500,
+                    {
+                        error:
+                            'failed to list logos',
+                    }
+                );
+            }
+
+            return;
+        }
+
         if (
             req.method === 'GET' &&
             req.url === '/health'
