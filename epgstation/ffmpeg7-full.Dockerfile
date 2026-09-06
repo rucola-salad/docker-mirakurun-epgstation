@@ -8,7 +8,15 @@ ARG FFMPEG_PREFIX=/opt/ffmpeg-${FFMPEG_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && \
+# Pin Debian repositories to a known-good snapshot so FFmpeg builds remain
+# reproducible even when the regular Bullseye mirrors change.
+RUN printf '%s\n' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main' \
+    > /etc/apt/sources.list
+
+RUN apt-get -o Acquire::http::No-Cache=true -o Acquire::http::Pipeline-Depth=0 update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         pkg-config \
@@ -64,11 +72,40 @@ RUN mkdir -p /tmp/ffmpeg-build && \
     make -j"$(nproc)" && \
     make install
 
+# Build TS timeline remux helper against this FFmpeg 7 installation.
+COPY ts-repair/ts-timeline-remux.c /tmp/ts-timeline-remux.c
+COPY ts-repair/ts-health-check.c /tmp/ts-health-check.c
+COPY ts-repair/ts-video-timeline.c /tmp/ts-video-timeline.c
+
+RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+    cc -O2 -Wall -Wextra \
+       /tmp/ts-timeline-remux.c \
+       -o "${FFMPEG_PREFIX}/bin/ts-timeline-remux.real" \
+       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+         pkg-config --cflags --libs libavformat libavcodec libavutil)
+
+RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+    cc -O2 -Wall -Wextra \
+       /tmp/ts-health-check.c \
+       -o "${FFMPEG_PREFIX}/bin/ts-health-check.real" \
+       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+         pkg-config --cflags --libs libavformat libavcodec libavutil)
+
+RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+    cc -O2 -Wall -Wextra \
+       /tmp/ts-video-timeline.c \
+       -o "${FFMPEG_PREFIX}/bin/ts-video-timeline.real" \
+       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+         pkg-config --cflags --libs libavformat libavcodec libavutil)
+
 # Collect runtime shared libraries
 RUN mkdir -p "${FFMPEG_PREFIX}/lib/runtime" && \
     { \
         lddtree -l "${FFMPEG_PREFIX}/bin/ffmpeg"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ffprobe"; \
+        lddtree -l "${FFMPEG_PREFIX}/bin/ts-timeline-remux.real"; \
+        lddtree -l "${FFMPEG_PREFIX}/bin/ts-health-check.real"; \
+        lddtree -l "${FFMPEG_PREFIX}/bin/ts-video-timeline.real"; \
     } \
     | sort -u \
     | while read -r lib; do \
@@ -109,9 +146,48 @@ RUN printf '%s\n' \
     > "${FFMPEG_PREFIX}/bin/ffprobe" && \
     chmod 755 "${FFMPEG_PREFIX}/bin/ffprobe"
 
+# ts-timeline-remux wrapper
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+    'PREFIX="$(dirname "$SELF_DIR")"' \
+    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+    'exec "$SELF_DIR/ts-timeline-remux.real" "$@"' \
+    > "${FFMPEG_PREFIX}/bin/ts-timeline-remux" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/ts-timeline-remux"
+
+# ts-health-check wrapper
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+    'PREFIX="$(dirname "$SELF_DIR")"' \
+    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+    'exec "$SELF_DIR/ts-health-check.real" "$@"' \
+    > "${FFMPEG_PREFIX}/bin/ts-health-check" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/ts-health-check"
+
+# ts-video-timeline wrapper
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+    'PREFIX="$(dirname "$SELF_DIR")"' \
+    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+    'exec "$SELF_DIR/ts-video-timeline.real" "$@"' \
+    > "${FFMPEG_PREFIX}/bin/ts-video-timeline" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/ts-video-timeline"
+
 # Builder verification
 RUN "${FFMPEG_PREFIX}/bin/ffmpeg" -version && \
-    "${FFMPEG_PREFIX}/bin/ffprobe" -version
+    "${FFMPEG_PREFIX}/bin/ffprobe" -version && \
+    output="$("${FFMPEG_PREFIX}/bin/ts-timeline-remux" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$("${FFMPEG_PREFIX}/bin/ts-health-check" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$("${FFMPEG_PREFIX}/bin/ts-video-timeline" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:'
 
 # ============================================================
 # Stage 2: EPGStation
@@ -126,4 +202,13 @@ COPY --from=ffmpeg-builder \
 
 # Keep existing /usr/local/bin/ffmpeg 4.2.4 untouched
 RUN "/opt/ffmpeg-7.0.2/bin/ffmpeg" -version && \
-    "/opt/ffmpeg-7.0.2/bin/ffprobe" -version
+    "/opt/ffmpeg-7.0.2/bin/ffprobe" -version && \
+    output="$(/opt/ffmpeg-7.0.2/bin/ts-timeline-remux 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$(/opt/ffmpeg-7.0.2/bin/ts-health-check 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$(/opt/ffmpeg-7.0.2/bin/ts-video-timeline 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:'

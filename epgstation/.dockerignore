@@ -1,0 +1,5 @@
+# Runtime recording data must never be sent to docker build context.
+test-env/recorded/
+
+# Runtime logs are not build inputs.
+test-env/logs/
