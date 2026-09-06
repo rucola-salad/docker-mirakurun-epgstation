@@ -218,7 +218,7 @@ export default abstract class RecordedStreamBaseModel
 
         let cmd = this.processOption.cmd
             .replace(/%FFMPEG%/g, this.config.ffmpeg)
-            .replace(/%SS%/g, this.videoFileType === 'ts' ? '' : this.processOption.playPosition.toString(10));
+            .replace(/%SS%/g, this.processOption.playPosition.toString(10));
 
         if (this.getStreamType() === 'RecordedHLS') {
             cmd = cmd
@@ -249,6 +249,11 @@ export default abstract class RecordedStreamBaseModel
 
         // エンコードファイルなら何もしない
         if (this.videoFileType === 'encoded') {
+            return;
+        }
+
+        // 録画完了済み TS は FFmpeg にファイルを直接開かせ、時刻ベースでシークする
+        if (this.videoFileType === 'ts' && this.isRecording === false) {
             return;
         }
 

@@ -15,6 +15,9 @@
                 <transition name="fade">
                     <div v-if="isShowControl === true">
                         <div v-if="isLive === false" class="d-flex center-buttons" v-on:click="stopPropagation">
+                            <v-btn v-if="hasCmAnalysis" class="add-shadow mx-4" icon dark aria-label="前のチャプター" v-on:click="seekPreviousChapter">
+                                <v-icon dark>mdi-skip-previous</v-icon>
+                            </v-btn>
                             <v-btn v-if="duration > 0" class="add-shadow mx-4" icon dark v-on:click="rewindTime(30)">
                                 <v-icon dark>mdi-rewind-30</v-icon>
                             </v-btn>
@@ -30,6 +33,9 @@
                             </v-btn>
                             <v-btn v-if="duration > 0" class="add-shadow mx-4" icon dark v-on:click="forwardTime(30)">
                                 <v-icon dark>mdi-fast-forward-30</v-icon>
+                            </v-btn>
+                            <v-btn v-if="hasCmAnalysis" class="add-shadow mx-4" icon dark aria-label="次のチャプター" v-on:click="seekNextChapter">
+                                <v-icon dark>mdi-skip-next</v-icon>
                             </v-btn>
                         </div>
                         <v-btn v-if="isEnabledRotation === true && isFullscreen === true" class="rotation-button" icon dark v-on:click="clickRotationButton">
@@ -90,7 +96,21 @@
                                         <span class="mx-1">/</span>
                                         <span>{{ durationStr }}</span>
                                     </div>
+                                    <div v-if="hasCmRanges" class="time Caption mx-2">
+                                        <span>{{ cmStatusText }}</span>
+                                    </div>
                                     <v-spacer></v-spacer>
+                                    <v-btn
+                                        v-if="hasCmRanges"
+                                        icon
+                                        dark
+                                        class="cm-skip-icon"
+                                        v-bind:class="{ disabled: isCmSkipEnabled === false }"
+                                        aria-label="CM自動スキップ"
+                                        v-on:click="switchCmSkip"
+                                    >
+                                        <v-icon>mdi-fast-forward-outline</v-icon>
+                                    </v-btn>
                                     <v-btn
                                         v-if="isEnabledSubtitles === true"
                                         icon
@@ -237,6 +257,8 @@ import RecordedStreamingVideo from '@/components/video/RecordedStreamingVideo.vu
 import LiveMpegTsVideo from '@/components/video/LiveMpegTsVideo.vue';
 import * as VideoParam from '@/components/video/ViedoParam';
 import container from '@/model/ModelContainer';
+import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerChapter, ICmAnalyzerCmRange } from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
+import IRecordedApiModel from '@/model/api/recorded/IRecordedApiModel';
 import { ISettingStorageModel } from '@/model/storage/setting/ISettingStorageModel';
 import UaUtil from '@/util/UaUtil';
 import Util from '@/util/Util';
@@ -291,6 +313,17 @@ export default class VideoContainer extends Vue {
     public playbackRate: number = 1.0;
     public isChangingCurrentPosition: boolean = false;
     private settingStorageModel: ISettingStorageModel = container.get<ISettingStorageModel>('ISettingStorageModel');
+
+    private cmAnalyzerApiModel: ICmAnalyzerApiModel = container.get<ICmAnalyzerApiModel>('ICmAnalyzerApiModel');
+
+    private recordedApiModel: IRecordedApiModel = container.get<IRecordedApiModel>('IRecordedApiModel');
+
+    public cmAnalysis: ICmAnalyzerAnalysis | null = null;
+    public isCmSkipEnabled: boolean = this.settingStorageModel.tmp.enableCmSkipByDefault;
+
+    private cmAnalysisLoadSerial: number = 0;
+    private cmAutoSkipSuppressedUntil: number = 0;
+    private lastAutoSkippedCmRangeIndex: number | null = null;
 
     public isJikkyoEnabled: boolean = this.settingStorageModel.tmp.showJikkyoByDefault;
     public isJikkyoAvailable: boolean = false;
@@ -349,6 +382,222 @@ export default class VideoContainer extends Vue {
         this.isFirstPlay = true;
         this.isPlaybackPositionRestored = false;
         this.lastPlaybackPositionSavedAt = 0;
+        this.cmAnalysis = null;
+        this.lastAutoSkippedCmRangeIndex = null;
+        this.cmAutoSkipSuppressedUntil = 0;
+    }
+
+    @Watch('recordedId', { immediate: true })
+    public onRecordedIdChange(): void {
+        void this.loadCmAnalysis();
+    }
+
+    @Watch('recordedJikkyoVideoFileId', { immediate: true })
+    public onRecordedVideoFileIdChange(): void {
+        void this.loadCmAnalysis();
+    }
+
+    public get hasCmAnalysis(): boolean {
+        return this.cmAnalysis !== null && Array.isArray(this.cmAnalysis.timeline.chapters) && this.cmAnalysis.timeline.chapters.length > 0;
+    }
+
+    public get hasCmRanges(): boolean {
+        return this.getPlayableCmRanges().length > 0;
+    }
+
+    public get cmStatusText(): string {
+        const ranges = this.getPlayableCmRanges();
+
+        if (ranges.length === 0) {
+            return '';
+        }
+
+        const currentIndex = ranges.findIndex(range => this.currentTime >= (range.startTime as number) && this.currentTime < (range.endTime as number));
+
+        const autoText = this.isCmSkipEnabled ? '自動ON' : '自動OFF';
+
+        if (currentIndex >= 0) {
+            return `CM区間 ${currentIndex + 1}/${ranges.length} ` + autoText;
+        }
+
+        return `CM ${ranges.length}区間 ` + autoText;
+    }
+
+    private async loadCmAnalysis(): Promise<void> {
+        const serial = ++this.cmAnalysisLoadSerial;
+
+        this.cmAnalysis = null;
+        this.lastAutoSkippedCmRangeIndex = null;
+
+        if (this.recordedId === null || typeof this.recordedId === 'undefined' || typeof this.recordedJikkyoVideoFileId === 'undefined') {
+            return;
+        }
+
+        try {
+            const recorded = await this.recordedApiModel.get(this.recordedId, false);
+
+            if (serial !== this.cmAnalysisLoadSerial) {
+                return;
+            }
+
+            const videoFiles = recorded.videoFiles || [];
+
+            const videoFile = videoFiles.find(item => item.id === this.recordedJikkyoVideoFileId);
+
+            /*
+             * CMカット済み動画は元録画タイムラインと一致しないため、
+             * チャプター移動もCM自動スキップも適用しない。
+             */
+            if (videoFile && videoFile.cmState === 'cut') {
+                return;
+            }
+
+            const analysis = await this.cmAnalyzerApiModel.getAnalysis(this.recordedId);
+
+            if (serial !== this.cmAnalysisLoadSerial) {
+                return;
+            }
+
+            this.cmAnalysis = analysis;
+        } catch (err) {
+            if (serial !== this.cmAnalysisLoadSerial) {
+                return;
+            }
+
+            console.error('CM analysis load failed', err);
+
+            this.cmAnalysis = null;
+        }
+    }
+
+    private getPlayableCmRanges(): ICmAnalyzerCmRange[] {
+        if (this.cmAnalysis === null || !Array.isArray(this.cmAnalysis.timeline.cmRanges)) {
+            return [];
+        }
+
+        return this.cmAnalysis.timeline.cmRanges.filter(
+            range =>
+                typeof range.startTime === 'number' && isFinite(range.startTime) && typeof range.endTime === 'number' && isFinite(range.endTime) && range.endTime > range.startTime,
+        );
+    }
+
+    private suppressCmAutoSkip(): void {
+        this.cmAutoSkipSuppressedUntil = new Date().getTime() + 1500;
+
+        this.lastAutoSkippedCmRangeIndex = null;
+    }
+
+    private seekPlaybackTime(time: number): void {
+        if (typeof this.$refs.video === 'undefined' || !isFinite(time)) {
+            return;
+        }
+
+        const seekTime = Math.max(0, this.duration > 0 ? Math.min(time, this.duration) : time);
+
+        this.suppressCmAutoSkip();
+
+        (this.$refs.video as BaseVideo).setCurrentTime(seekTime);
+
+        this.currentTime = seekTime;
+
+        this.syncRecordedJikkyoSeek(seekTime);
+
+        this.updateLastSeekTime();
+        this.updateTimeStr();
+    }
+
+    public seekPreviousChapter(): void {
+        if (this.cmAnalysis === null || !Array.isArray(this.cmAnalysis.timeline.chapters)) {
+            return;
+        }
+
+        const targetTime = this.currentTime - 1;
+
+        let target: ICmAnalyzerChapter | null = null;
+
+        for (const chapter of this.cmAnalysis.timeline.chapters) {
+            if (chapter.time <= targetTime) {
+                target = chapter;
+            } else {
+                break;
+            }
+        }
+
+        if (target !== null) {
+            this.seekPlaybackTime(target.time);
+        } else {
+            this.seekPlaybackTime(0);
+        }
+    }
+
+    public seekNextChapter(): void {
+        if (this.cmAnalysis === null || !Array.isArray(this.cmAnalysis.timeline.chapters)) {
+            return;
+        }
+
+        const target = this.cmAnalysis.timeline.chapters.find(chapter => chapter.time > this.currentTime + 0.5);
+
+        if (target) {
+            this.seekPlaybackTime(target.time);
+        }
+    }
+
+    public switchCmSkip(): void {
+        this.isCmSkipEnabled = !this.isCmSkipEnabled;
+
+        this.lastAutoSkippedCmRangeIndex = null;
+
+        if (this.isCmSkipEnabled) {
+            this.maybeAutoSkipCm();
+        }
+    }
+
+    private maybeAutoSkipCm(): void {
+        if (
+            this.isCmSkipEnabled === false ||
+            this.isChangingCurrentPosition === true ||
+            new Date().getTime() < this.cmAutoSkipSuppressedUntil ||
+            typeof this.$refs.video === 'undefined'
+        ) {
+            return;
+        }
+
+        const ranges = this.getPlayableCmRanges();
+
+        for (let i = 0; i < ranges.length; i++) {
+            const range = ranges[i];
+
+            const startTime = range.startTime as number;
+
+            const endTime = range.endTime as number;
+
+            if (this.currentTime >= startTime && this.currentTime < endTime) {
+                if (this.lastAutoSkippedCmRangeIndex === i) {
+                    return;
+                }
+
+                this.lastAutoSkippedCmRangeIndex = i;
+
+                const seekTime = this.duration > 0 ? Math.min(endTime + 0.05, this.duration) : endTime + 0.05;
+
+                (this.$refs.video as BaseVideo).setCurrentTime(seekTime);
+
+                this.currentTime = seekTime;
+
+                this.syncRecordedJikkyoSeek(seekTime);
+
+                this.updateTimeStr();
+                return;
+            }
+        }
+
+        if (this.lastAutoSkippedCmRangeIndex !== null) {
+            const lastRange = ranges[this.lastAutoSkippedCmRangeIndex];
+
+            if (!lastRange || this.currentTime < (lastRange.startTime as number) - 0.5 || this.currentTime > (lastRange.endTime as number) + 0.5) {
+                this.lastAutoSkippedCmRangeIndex = null;
+            }
+        }
     }
 
     private get isLive(): boolean {
@@ -482,6 +731,7 @@ export default class VideoContainer extends Vue {
         this.currentTime = this.getVideoCurrentTime();
         this.updateTimeStr();
         this.updateSubtitleState();
+        this.maybeAutoSkipCm();
         this.savePlaybackPosition();
     }
 
@@ -647,6 +897,7 @@ export default class VideoContainer extends Vue {
             return;
         }
 
+        this.suppressCmAutoSkip();
         this.updateLastSeekTime();
         (this.$refs.video as BaseVideo).setCurrentTime(time);
         this.syncRecordedJikkyoSeek(time);
@@ -801,6 +1052,7 @@ export default class VideoContainer extends Vue {
 
         const newCurrentTime = this.currentTime - time;
         const seekTime = newCurrentTime < 0 ? 0 : newCurrentTime;
+        this.suppressCmAutoSkip();
         (this.$refs.video as BaseVideo).setCurrentTime(seekTime);
         this.syncRecordedJikkyoSeek(seekTime);
         this.updateLastSeekTime();
@@ -817,6 +1069,7 @@ export default class VideoContainer extends Vue {
 
         const newCurrentTime = this.currentTime + time;
         const seekTime = newCurrentTime > this.duration ? this.duration : newCurrentTime;
+        this.suppressCmAutoSkip();
         (this.$refs.video as BaseVideo).setCurrentTime(seekTime);
         this.syncRecordedJikkyoSeek(seekTime);
         this.updateLastSeekTime();

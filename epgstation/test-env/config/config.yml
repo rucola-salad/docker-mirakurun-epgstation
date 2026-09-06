@@ -165,12 +165,12 @@ stream:
             webm:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 192k -ac 2
+                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 192k -ac 2
                       -c:v libvpx-vp9 -vf yadif,scale=-2:720 -b:v 3000k -deadline realtime -speed 4 -cpu-used -8 -y -f
                       webm pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 128k -ac 2
+                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 3 -c:a libvorbis -ar 48000 -b:a 128k -ac 2
                       -c:v libvpx-vp9 -vf yadif,scale=-2:480 -b:v 1500k -deadline realtime -speed 4 -cpu-used -8 -y -f
                       webm pipe:1'
 
@@ -178,7 +178,7 @@ stream:
                 - name: 720p
                   cmd:
                       '/app/config/ffmpeg-i965.sh -dual_mono_mode main
-                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -vaapi_device /dev/dri/renderD128 -ss %SS% -i %INPUT% -sn -threads 0
                       -c:a aac -ar 48000 -b:a 192k -ac 2
                       -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
                       -c:v h264_vaapi -b:v 3000k -profile:v high
@@ -187,7 +187,7 @@ stream:
                 - name: 480p
                   cmd:
                       '/app/config/ffmpeg-i965.sh -dual_mono_mode main
-                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0
+                      -vaapi_device /dev/dri/renderD128 -ss %SS% -i %INPUT% -sn -threads 0
                       -c:a aac -ar 48000 -b:a 128k -ac 2
                       -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
                       -c:v h264_vaapi -b:v 1500k -profile:v high
@@ -198,7 +198,7 @@ stream:
                 - name: 720p
                   cmd:
                       '/app/config/ffmpeg-i965.sh -dual_mono_mode main
-                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -vaapi_device /dev/dri/renderD128 -ss %SS% -i %INPUT% -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
                       -c:a aac -ar 48000 -b:a 192k -ac 2
                       -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1280:h=720
                       -c:v h264_vaapi -b:v 3000k -profile:v high -flags +loop-global_header
@@ -207,7 +207,7 @@ stream:
                 - name: 480p
                   cmd:
                       '/app/config/ffmpeg-i965.sh -dual_mono_mode main
-                      -vaapi_device /dev/dri/renderD128 -i pipe:0 -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
+                      -vaapi_device /dev/dri/renderD128 -ss %SS% -i %INPUT% -sn -threads 0 -ignore_unknown -max_muxing_queue_size 1024
                       -c:a aac -ar 48000 -b:a 128k -ac 2
                       -vf format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=854:h=480
                       -c:v h264_vaapi -b:v 1500k -profile:v high -flags +loop-global_header

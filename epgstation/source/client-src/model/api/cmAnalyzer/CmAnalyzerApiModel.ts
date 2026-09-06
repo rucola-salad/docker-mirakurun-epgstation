@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify';
 import IRepositoryModel from '../IRepositoryModel';
-import ICmAnalyzerApiModel, { ICmAnalyzerLogo } from './ICmAnalyzerApiModel';
+import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerLogo } from './ICmAnalyzerApiModel';
 
 @injectable()
 export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
@@ -25,5 +25,21 @@ export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
 
     public async deleteLogo(stationId: string): Promise<void> {
         await this.repository.delete(`/cm-analyzer/logos/${encodeURIComponent(stationId)}`);
+    }
+
+    public async getAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null> {
+        try {
+            const result = await this.repository.get(`/cm-analyzer/analysis/${recordedId.toString(10)}`);
+
+            return result.data as ICmAnalyzerAnalysis;
+        } catch (err) {
+            const response = (err as any).response;
+
+            if (response && response.status === 404) {
+                return null;
+            }
+
+            throw err;
+        }
     }
 }

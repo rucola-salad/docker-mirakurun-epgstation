@@ -27,6 +27,10 @@ const FFMPEG_COMMAND =
     process.env.FFMPEG_COMMAND ||
     'ffmpeg';
 
+const FFPROBE_COMMAND =
+    process.env.FFPROBE_COMMAND ||
+    'ffprobe';
+
 const parseChannel =
     require(path.join(JLSE_ROOT, 'src/channel')).parse;
 
@@ -225,6 +229,64 @@ function spawnAndCapture(command, args, options = {}) {
         });
     });
 }
+
+async function getVideoFrameRate(inputPath) {
+    const result =
+        await spawnAndCapture(
+            FFPROBE_COMMAND,
+            [
+                '-v',
+                'error',
+                '-select_streams',
+                'v:0',
+                '-show_entries',
+                'stream=avg_frame_rate',
+                '-of',
+                'default=noprint_wrappers=1:nokey=1',
+                inputPath,
+            ]
+        );
+
+    const values =
+        result.stdout
+            .split(/\r?\n/)
+            .map(value => value.trim())
+            .filter(value => value.length > 0);
+
+    for (const value of values) {
+        const parts =
+            value.split('/');
+
+        let fps;
+
+        if (parts.length === 2) {
+            const numerator =
+                Number(parts[0]);
+            const denominator =
+                Number(parts[1]);
+
+            fps =
+                denominator !== 0
+                    ? numerator / denominator
+                    : 0;
+        } else {
+            fps =
+                Number(value);
+        }
+
+        if (
+            Number.isFinite(fps) &&
+            fps > 0
+        ) {
+            return fps;
+        }
+    }
+
+    throw new Error(
+        `invalid video frame rate: ${result.stdout.trim()}`
+    );
+}
+
 
 function collectMatches(text, regex) {
     const matches = [];
@@ -774,6 +836,59 @@ function parseJlscp(filePath) {
     };
 }
 
+
+function buildPlaybackCmRanges(chapters, videoFps) {
+    const ranges = [];
+
+    for (let i = 0; i < chapters.length; i++) {
+        const chapter = chapters[i];
+
+        if (chapter.name !== 'XCM') {
+            continue;
+        }
+
+        let endChapter = null;
+
+        for (let j = i + 1; j < chapters.length; j++) {
+            const candidate = chapters[j];
+
+            // A10Sec / B60Sec / C90Sec などは
+            // CM後の付随区間としてスキップを継続する
+            if (/\d+Sec$/.test(candidate.name)) {
+                continue;
+            }
+
+            endChapter = candidate;
+            break;
+        }
+
+        if (!endChapter) {
+            continue;
+        }
+
+        ranges.push({
+            startFrame:
+                Math.round(
+                    chapter.time * videoFps
+                ),
+            endFrame:
+                Math.max(
+                    Math.round(
+                        endChapter.time * videoFps
+                    ) - 1,
+                    0
+                ),
+            startTime:
+                chapter.time,
+            endTime:
+                endChapter.time,
+        });
+    }
+
+    return ranges;
+}
+
+
 function parseKeepRanges(filePath) {
     const text =
         fs.readFileSync(filePath, 'utf8');
@@ -845,8 +960,14 @@ function buildAnalysis(outputRoot, metadata) {
     const keepRanges =
         parseKeepRanges(cutPath);
 
+    const playbackCmRanges =
+        buildPlaybackCmRanges(
+            chapters,
+            metadata.videoFps
+        );
+
     return {
-        version: 1,
+        version: 2,
         recordedId:
             metadata.recordedId,
         stationId:
@@ -860,6 +981,9 @@ function buildAnalysis(outputRoot, metadata) {
         analyzedAt:
             metadata.analyzedAt,
         timeline: {
+            frameRate:
+                metadata.videoFps,
+
             /*
              * chapters:
              *   Head-seek chapter positions for the original
@@ -875,7 +999,8 @@ function buildAnalysis(outputRoot, metadata) {
              *   retiming chapters/comments after cutting.
              */
             chapters,
-            cmRanges,
+            cmRanges:
+                playbackCmRanges,
             keepRanges,
         },
         jlse: {
@@ -1010,6 +1135,17 @@ async function runAnalysis(job) {
             outputRoot
         );
 
+        const videoFps =
+            await getVideoFrameRate(
+                workInput
+            );
+
+        log(
+            'video frame rate',
+            `recordedId=${job.recordedId}`,
+            `fps=${videoFps}`
+        );
+
         const metadata = {
             recordedId:
                 job.recordedId,
@@ -1029,6 +1165,7 @@ async function runAnalysis(job) {
                 job.sourcePath,
             analyzedAt:
                 new Date().toISOString(),
+            videoFps,
         };
 
         const analysis =
@@ -1292,6 +1429,115 @@ function createLogoPreviewPng(
 }
 
 
+async function loadAnalysisForPlayback(
+    recordedId
+) {
+    const analysisPath =
+        path.join(
+            DATA_ROOT,
+            String(recordedId),
+            'analysis.json'
+        );
+
+    if (!isUsableFile(analysisPath)) {
+        return null;
+    }
+
+    const analysis =
+        JSON.parse(
+            fs.readFileSync(
+                analysisPath,
+                'utf8'
+            )
+        );
+
+    if (
+        !analysis.timeline ||
+        !Array.isArray(
+            analysis.timeline.cmRanges
+        )
+    ) {
+        throw new Error(
+            'invalid analysis timeline'
+        );
+    }
+
+    let frameRate =
+        Number(
+            analysis.timeline.frameRate
+        );
+
+    if (
+        !Number.isFinite(frameRate) ||
+        frameRate <= 0
+    ) {
+        const sourcePath =
+            analysis.source &&
+            typeof analysis.source.sourcePath ===
+                'string'
+                ? analysis.source.sourcePath
+                : null;
+
+        if (
+            sourcePath &&
+            fs.existsSync(sourcePath)
+        ) {
+            try {
+                frameRate =
+                    await getVideoFrameRate(
+                        sourcePath
+                    );
+            } catch (err) {
+                log(
+                    'legacy analysis fps lookup failed',
+                    `recordedId=${recordedId}`,
+                    err
+                );
+            }
+        }
+    }
+
+    if (
+        Number.isFinite(frameRate) &&
+        frameRate > 0
+    ) {
+        analysis.timeline.frameRate =
+            frameRate;
+
+        if (
+            Array.isArray(
+                analysis.timeline.chapters
+            )
+        ) {
+            analysis.timeline.cmRanges =
+                buildPlaybackCmRanges(
+                    analysis.timeline.chapters,
+                    frameRate
+                );
+        } else {
+            analysis.timeline.cmRanges =
+                analysis.timeline.cmRanges.map(
+                    range => ({
+                        ...range,
+                        startTime:
+                            Number(
+                                range.startFrame
+                            ) / frameRate,
+                        endTime:
+                            (
+                                Number(
+                                    range.endFrame
+                                ) + 1
+                            ) / frameRate,
+                    })
+                );
+        }
+    }
+
+    return analysis;
+}
+
+
 function listLogos() {
     if (!fs.existsSync(LOGO_ROOT)) {
         return [];
@@ -1377,6 +1623,60 @@ function listLogos() {
 
 const server = http.createServer(
     async (req, res) => {
+        const analysisMatch =
+            req.method === 'GET'
+                ? req.url.match(
+                    /^\/analysis\/(\d+)$/
+                )
+                : null;
+
+        if (analysisMatch) {
+            const recordedId =
+                analysisMatch[1];
+
+            try {
+                const analysis =
+                    await loadAnalysisForPlayback(
+                        recordedId
+                    );
+
+                if (analysis === null) {
+                    sendJson(
+                        res,
+                        404,
+                        {
+                            error:
+                                'analysis not found',
+                        }
+                    );
+                    return;
+                }
+
+                sendJson(
+                    res,
+                    200,
+                    analysis
+                );
+            } catch (err) {
+                log(
+                    'analysis read failed',
+                    `recordedId=${recordedId}`,
+                    err
+                );
+
+                sendJson(
+                    res,
+                    500,
+                    {
+                        error:
+                            'failed to read analysis',
+                    }
+                );
+            }
+
+            return;
+        }
+
         const logoDeleteMatch =
             req.method === 'DELETE'
                 ? req.url.match(
