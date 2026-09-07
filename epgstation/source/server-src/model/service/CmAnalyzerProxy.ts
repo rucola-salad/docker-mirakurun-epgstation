@@ -13,7 +13,8 @@ const CM_ANALYZER_URL =
 
 export const requestCmAnalyzer = (
     pathname: string,
-    method: 'GET' | 'DELETE' = 'GET',
+    method: 'GET' | 'DELETE' | 'POST' = 'GET',
+    jsonBody?: unknown,
 ): Promise<ICmAnalyzerResponse> => {
     return new Promise((resolve, reject) => {
         const baseUrl =
@@ -33,11 +34,23 @@ export const requestCmAnalyzer = (
             return;
         }
 
+        const body =
+            typeof jsonBody === 'undefined'
+                ? null
+                : Buffer.from(JSON.stringify(jsonBody), 'utf8');
+
         const request =
             http.request(
                 target,
                 {
                     method,
+                    headers:
+                        body === null
+                            ? undefined
+                            : {
+                                  'Content-Type': 'application/json',
+                                  'Content-Length': body.length,
+                              },
                 },
                 response => {
                     const chunks: Buffer[] = [];
@@ -63,6 +76,9 @@ export const requestCmAnalyzer = (
                 },
             );
 
+        if (body !== null) {
+            request.write(body);
+        }
         request.end();
 
         request.setTimeout(

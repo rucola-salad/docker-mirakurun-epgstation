@@ -26,6 +26,105 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
         this.recordedManage = recordedManage;
     }
 
+    /**
+     * Manual repair pre-check.
+     * Read/decode only; the source file is never modified.
+     * true: healthy, false: damage detected, null: check could not be executed.
+     */
+    public async check(
+        recorded: Recorded,
+        sourceVideoFileId: apid.VideoFileId,
+    ): Promise<boolean | null> {
+        const sourceVideoFile =
+            typeof recorded.videoFiles === 'undefined'
+                ? undefined
+                : recorded.videoFiles.find(v => v.id === sourceVideoFileId);
+
+        if (typeof sourceVideoFile === 'undefined') {
+            this.log.system.error(`TS health check source VideoFile is not found: ${sourceVideoFileId}`);
+            return null;
+        }
+
+        const inputPath = await this.videoUtil.getFullFilePathFromId(sourceVideoFileId);
+        if (inputPath === null) {
+            this.log.system.error(`TS health check source path is not found: ${sourceVideoFileId}`);
+            return null;
+        }
+
+        const repairBin = process.env.TS_REPAIR_PATH || 'ts-repair';
+        const ffmpegBin =
+            process.env.TS_REPAIR_FFMPEG_PATH ||
+            (path.isAbsolute(repairBin)
+                ? path.join(path.dirname(repairBin), 'ffmpeg')
+                : 'ffmpeg');
+
+        this.log.system.info(
+            `TS health check start: recorded=${recorded.id} source=${inputPath}`,
+        );
+
+        try {
+            const healthy = await new Promise<boolean>((resolve, reject) => {
+                const child = spawn(
+                    ffmpegBin,
+                    [
+                        '-hide_banner',
+                        '-v',
+                        'error',
+                        '-xerror',
+                        '-err_detect',
+                        'explode',
+                        '-i',
+                        inputPath,
+                        '-map',
+                        '0:v:0',
+                        '-map',
+                        '0:a?',
+                        '-f',
+                        'null',
+                        '-',
+                    ],
+                    {
+                        stdio: ['ignore', 'ignore', 'pipe'],
+                    },
+                );
+
+                let stderr = '';
+                if (child.stderr !== null) {
+                    child.stderr.on('data', chunk => {
+                        if (stderr.length < 64 * 1024) {
+                            stderr += chunk.toString();
+                        }
+                    });
+                }
+
+                child.once('error', reject);
+                child.once('close', code => {
+                    if (code === 0) {
+                        resolve(true);
+                        return;
+                    }
+
+                    this.log.system.info(
+                        `TS health check detected damage: recorded=${recorded.id} source=${inputPath}`,
+                    );
+                    if (stderr.length > 0) {
+                        this.log.system.info(stderr.trim());
+                    }
+                    resolve(false);
+                });
+            });
+
+            this.log.system.info(
+                `TS health check completed: recorded=${recorded.id} healthy=${healthy}`,
+            );
+            return healthy;
+        } catch (err) {
+            this.log.system.error(`TS health check failed: recorded=${recorded.id}`);
+            this.log.system.error(err);
+            return null;
+        }
+    }
+
     public async repair(
         recorded: Recorded,
         sourceVideoFileId: apid.VideoFileId,
@@ -65,9 +164,6 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
         }
 
         const parsed = path.parse(sourceVideoFile.filePath);
-        const repairedFileName = `${parsed.name}.repaired.ts`;
-        const repairedRelativePath = path.join(parsed.dir, repairedFileName);
-
         const parentDirPath = this.videoUtil.getParentDirPath(sourceVideoFile.parentDirectoryName);
         if (parentDirPath === null) {
             this.log.system.error(
@@ -76,12 +172,20 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
             return null;
         }
 
-        const outputPath = path.join(parentDirPath, repairedRelativePath);
+        let repairedFileName = `${parsed.name}.repaired.ts`;
+        let repairedRelativePath = path.join(parsed.dir, repairedFileName);
+        let outputPath = path.join(parentDirPath, repairedRelativePath);
 
-        /*
-         * ts-repair itself refuses an existing output/work directory.
-         * Include recorded ID and current time so separate repair attempts do not collide.
-         */
+        /* Never overwrite a previous repaired TS. */
+        try {
+            await fs.access(outputPath);
+            repairedFileName = `${parsed.name}.repaired-${Date.now()}.ts`;
+            repairedRelativePath = path.join(parsed.dir, repairedFileName);
+            outputPath = path.join(parentDirPath, repairedRelativePath);
+        } catch (_err) {
+            // The normal first repair output does not exist.
+        }
+
         const workDir = path.join(
             workRoot,
             `recorded-${recorded.id}-${Date.now()}`,
@@ -160,10 +264,6 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
                     `TS repair work directory removed: recorded=${recorded.id} work=${workDir}`,
                 );
             } catch (err) {
-                /*
-                 * Repair itself has already succeeded and the repaired TS has been
-                 * registered. Cleanup failure must not invalidate the repaired file.
-                 */
                 this.log.system.error(
                     `TS repair work directory cleanup failed: recorded=${recorded.id} work=${workDir}`,
                 );
