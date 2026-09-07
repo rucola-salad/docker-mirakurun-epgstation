@@ -11,11 +11,12 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr v-for="item in items" v-bind:key="item.id" v-on:click="gotoDetail(item)" v-bind:class="{ 'selected-color': item.isSelected === true }">
+                    <tr v-for="item in items" v-bind:key="item.recordedItem.id" v-on:click="gotoDetail(item)" v-bind:class="{ 'selected-color': item.isSelected === true }">
                         <td>
                             <div>
                                 {{ item.display.name }}
                                 <v-icon v-if="hasJikkyo(item) === true" small title="実況コメントあり">mdi-message-text</v-icon>
+                                <v-icon v-if="hasChapters(item) === true" small title="チャプターあり">mdi-format-list-bulleted</v-icon>
                             </div>
                             <RecordedVideoFileChips
                                 v-if="typeof item.recordedItem.videoFiles !== 'undefined'"
@@ -42,30 +43,23 @@ import { RecordedDisplayData } from '@/model/state/recorded/IRecordedUtil';
 import { Component, Prop, Vue } from 'vue-property-decorator';
 import * as apid from '../../../../api';
 
-@Component({
-    components: {
-        RecordedItemMenu,
-        RecordedVideoFileChips,
-    },
-})
+@Component({ components: { RecordedItemMenu, RecordedVideoFileChips } })
 export default class RecordedTableItems extends Vue {
-    @Prop({ required: true })
-    public items!: RecordedDisplayData[];
-
-    @Prop({ required: true })
-    public isEditMode!: boolean;
-
-    @Prop({ required: true })
-    public isShowDropInfo!: boolean;
+    @Prop({ required: true }) public items!: RecordedDisplayData[];
+    @Prop({ required: true }) public isEditMode!: boolean;
+    @Prop({ required: true }) public isShowDropInfo!: boolean;
 
     public hasJikkyo(item: RecordedDisplayData): boolean {
         return typeof item.recordedItem.videoFiles !== 'undefined' && item.recordedItem.videoFiles.some(v => v.hasJikkyo === true);
     }
 
+    public hasChapters(item: RecordedDisplayData): boolean {
+        return (item.recordedItem as any).hasChapters === true;
+    }
+
     public gotoDetail(item: RecordedDisplayData): void {
         if (this.isEditMode === true) {
             this.$emit('selected', item.recordedItem.id);
-
             return;
         }
         this.$emit('detail', item.recordedItem.id);

@@ -15,16 +15,13 @@ export default class SocketIOManageModel implements ISocketIOManageModel {
     private ios: SocketIO.Server[] = [];
     private callTimer: NodeJS.Timer | null = null;
     private encodeProgressCallTimer: NodeJS.Timer | null = null;
+    private recordedMaintenanceCallTimer: NodeJS.Timer | null = null;
 
     constructor(@inject('ILoggerModel') logger: ILoggerModel, @inject('IConfiguration') configuration: IConfiguration) {
         this.log = logger.getLogger();
         this.config = configuration.getConfig();
     }
 
-    /**
-     * socket.io 初期化
-     * @param servers: http.Server[]
-     */
     public initialize(servers: http.Server[]): void {
         for (const s of servers) {
             this.ios.push(
@@ -43,9 +40,6 @@ export default class SocketIOManageModel implements ISocketIOManageModel {
         this.log.system.info('SocketIO Server has started.');
     }
 
-    /**
-     * client へ状態変更通知
-     */
     public notifyClient(): void {
         if (this.callTimer === null) {
             this.callTimer = setTimeout(() => {
@@ -62,9 +56,6 @@ export default class SocketIOManageModel implements ISocketIOManageModel {
         }
     }
 
-    /**
-     * エンコードの進捗情報更新を通知
-     */
     public notifyUpdateEncodeProgress(): void {
         if (this.encodeProgressCallTimer === null) {
             this.encodeProgressCallTimer = setTimeout(() => {
@@ -78,6 +69,22 @@ export default class SocketIOManageModel implements ISocketIOManageModel {
                     io.sockets.emit('updateEncode');
                 }
             }, 200);
+        }
+    }
+
+    public notifyRecordedMaintenance(): void {
+        if (this.recordedMaintenanceCallTimer === null) {
+            this.recordedMaintenanceCallTimer = setTimeout(() => {
+                this.recordedMaintenanceCallTimer = null;
+
+                if (this.ios.length === 0) {
+                    throw new Error('must call SocketIoManageModel initialize');
+                }
+
+                for (const io of this.ios) {
+                    io.sockets.emit('updateRecordedMaintenance');
+                }
+            }, 100);
         }
     }
 }

@@ -11,27 +11,20 @@
         ></v-img>
         <div v-on:click="gotoDetail" class="content pa-2 my-auto">
             <div class="d-flex align-center">
-                <div class="text mt-1 subtitle-2 font-weight-bold">
-                    {{ item.display.name }}
-                </div>
+                <div class="text mt-1 subtitle-2 font-weight-bold">{{ item.display.name }}</div>
                 <v-icon v-if="hasJikkyo === true" small class="ml-1" title="実況コメントあり">mdi-message-text</v-icon>
+                <v-icon v-if="hasChapters === true" small class="ml-1" title="チャプターあり">mdi-format-list-bulleted</v-icon>
                 <div v-if="isEditMode === false" class="menu-wrap">
                     <RecordedItemMenu :recordedItem="item.recordedItem" v-on:stopEncode="stopEncode"></RecordedItemMenu>
                 </div>
             </div>
-            <div class="text caption font-weight-light">
-                {{ item.display.channelName }}
-            </div>
+            <div class="text caption font-weight-light">{{ item.display.channelName }}</div>
             <div class="text caption font-weight-light">{{ item.display.time }} ({{ item.display.duration }} m)</div>
-
             <div
                 v-if="isShowDropInfo === true && typeof item.display.drop !== 'undefined'"
                 class="text caption font-weight-light"
                 v-bind:class="{ droped: item.display.hasDrop === true }"
-            >
-                {{ item.display.dropSimple }}
-            </div>
-
+            >{{ item.display.dropSimple }}</div>
             <RecordedVideoFileChips
                 v-else-if="typeof item.recordedItem.videoFiles !== 'undefined'"
                 :videoFiles="item.recordedItem.videoFiles"
@@ -48,33 +41,24 @@ import { RecordedDisplayData } from '@/model/state/recorded/IRecordedUtil';
 import { Component, Prop, Vue } from 'vue-property-decorator';
 import * as apid from '../../../../api';
 
-@Component({
-    components: {
-        RecordedItemMenu,
-        RecordedVideoFileChips,
-    },
-})
+@Component({ components: { RecordedItemMenu, RecordedVideoFileChips } })
 export default class RecordedSmallCard extends Vue {
-    @Prop({ required: true })
-    public item!: RecordedDisplayData;
-
-    @Prop({ required: false })
-    public noThumbnail: boolean | undefined;
-
-    @Prop({ required: true })
-    public isEditMode!: boolean;
-
-    @Prop({ required: true })
-    public isShowDropInfo!: boolean;
+    @Prop({ required: true }) public item!: RecordedDisplayData;
+    @Prop({ required: false }) public noThumbnail: boolean | undefined;
+    @Prop({ required: true }) public isEditMode!: boolean;
+    @Prop({ required: true }) public isShowDropInfo!: boolean;
 
     get hasJikkyo(): boolean {
         return typeof this.item.recordedItem.videoFiles !== 'undefined' && this.item.recordedItem.videoFiles.some(v => v.hasJikkyo === true);
     }
 
+    get hasChapters(): boolean {
+        return (this.item.recordedItem as any).hasChapters === true;
+    }
+
     public gotoDetail(): void {
         if (this.isEditMode === true) {
             this.$emit('selected', this.item.recordedItem.id);
-
             return;
         }
         this.$emit('detail', this.item.recordedItem.id);

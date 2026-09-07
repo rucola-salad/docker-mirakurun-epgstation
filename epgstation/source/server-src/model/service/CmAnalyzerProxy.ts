@@ -7,94 +7,60 @@ export interface ICmAnalyzerResponse {
     body: Buffer;
 }
 
-const CM_ANALYZER_URL =
-    process.env.CM_ANALYZER_URL ||
-    'http://cm-analyzer:8080';
+const CM_ANALYZER_URL = process.env.CM_ANALYZER_URL || 'http://cm-analyzer:8080';
 
 export const requestCmAnalyzer = (
     pathname: string,
     method: 'GET' | 'DELETE' | 'POST' = 'GET',
     jsonBody?: unknown,
+    timeoutMs = 10000,
 ): Promise<ICmAnalyzerResponse> => {
     return new Promise((resolve, reject) => {
-        const baseUrl =
-            CM_ANALYZER_URL.endsWith('/')
-                ? CM_ANALYZER_URL
-                : `${CM_ANALYZER_URL}/`;
-
-        const target =
-            new URL(pathname, baseUrl);
+        const baseUrl = CM_ANALYZER_URL.endsWith('/') ? CM_ANALYZER_URL : `${CM_ANALYZER_URL}/`;
+        const target = new URL(pathname, baseUrl);
 
         if (target.protocol !== 'http:') {
-            reject(
-                new Error(
-                    `unsupported CM analyzer protocol: ${target.protocol}`,
-                ),
-            );
+            reject(new Error(`unsupported CM analyzer protocol: ${target.protocol}`));
             return;
         }
 
-        const body =
-            typeof jsonBody === 'undefined'
-                ? null
-                : Buffer.from(JSON.stringify(jsonBody), 'utf8');
-
-        const request =
-            http.request(
-                target,
-                {
-                    method,
-                    headers:
-                        body === null
-                            ? undefined
-                            : {
-                                  'Content-Type': 'application/json',
-                                  'Content-Length': body.length,
-                              },
-                },
-                response => {
-                    const chunks: Buffer[] = [];
-
-                    response.on('data', chunk => {
-                        chunks.push(
-                            Buffer.isBuffer(chunk)
-                                ? chunk
-                                : Buffer.from(chunk),
-                        );
+        const body = typeof jsonBody === 'undefined' ? null : Buffer.from(JSON.stringify(jsonBody), 'utf8');
+        const request = http.request(
+            target,
+            {
+                method,
+                headers:
+                    body === null
+                        ? undefined
+                        : {
+                              'Content-Type': 'application/json',
+                              'Content-Length': body.length,
+                          },
+            },
+            response => {
+                const chunks: Buffer[] = [];
+                response.on('data', chunk => {
+                    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                });
+                response.on('end', () => {
+                    resolve({
+                        statusCode: response.statusCode || 500,
+                        headers: response.headers,
+                        body: Buffer.concat(chunks),
                     });
-
-                    response.on('end', () => {
-                        resolve({
-                            statusCode:
-                                response.statusCode || 500,
-                            headers:
-                                response.headers,
-                            body:
-                                Buffer.concat(chunks),
-                        });
-                    });
-                },
-            );
+                });
+            },
+        );
 
         if (body !== null) {
             request.write(body);
         }
         request.end();
 
-        request.setTimeout(
-            10000,
-            () => {
-                request.destroy(
-                    new Error(
-                        'CM analyzer request timeout',
-                    ),
-                );
-            },
-        );
+        request.setTimeout(timeoutMs, () => {
+            request.destroy(new Error('CM analyzer request timeout'));
+        });
 
-        request.on(
-            'error',
-            reject,
-        );
+        request.on('error', reject);
     });
 };

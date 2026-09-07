@@ -13,9 +13,6 @@ class SocketIOModel implements ISocketIOModel {
         this.serverConfiModel = serverConfiModel;
     }
 
-    /**
-     * SokcetIO 初期設定
-     */
     public Iinitialize(): void {
         const config = this.serverConfiModel.getConfig();
         if (config === null || this.io !== null) {
@@ -27,65 +24,57 @@ class SocketIOModel implements ISocketIOModel {
         });
     }
 
-    /**
-     * 設定済み socketIO をのインスタを返す
-     */
     public getIO(): socketIo.Socket | null {
         return this.io;
     }
 
-    /**
-     * update status イベントへのコールバック追加
-     * @param callback: () => void
-     */
     public onUpdateState(callback: () => void): void {
         if (this.io === null) {
             throw new Error('IOIsNull');
         }
-
         this.io.on(SocketIOModel.UPDATE_STATUS_EVENT, callback);
     }
 
-    /**
-     * update status イベントへのコールバック削除
-     * @param callback: () => void
-     */
     public offUpdateState(callback: () => void): void {
         if (this.io === null) {
             throw new Error('IOIsNull');
         }
-
         this.io.off(SocketIOModel.UPDATE_STATUS_EVENT, callback);
     }
 
-    /**
-     * update encode status イベントへのコールバック追加
-     * @param callback: () => void
-     */
     public onUpdateEncodeState(callback: () => void): void {
         if (this.io === null) {
             throw new Error('IOIsNull');
         }
-
         this.io.on(SocketIOModel.UPDATE_ENCODE_STATUS_EVENT, callback);
     }
 
-    /**
-     * update encode status イベントへのコールバック削除
-     * @param callback: () => void
-     */
     public offUpdateEncodeState(callback: () => void): void {
         if (this.io === null) {
             throw new Error('IOIsNull');
         }
-
         this.io.off(SocketIOModel.UPDATE_ENCODE_STATUS_EVENT, callback);
+    }
+
+    public onUpdateRecordedMaintenance(callback: () => void): void {
+        if (this.io === null) {
+            throw new Error('IOIsNull');
+        }
+        this.io.on(SocketIOModel.UPDATE_RECORDED_MAINTENANCE_EVENT, callback);
+    }
+
+    public offUpdateRecordedMaintenance(callback: () => void): void {
+        if (this.io === null) {
+            throw new Error('IOIsNull');
+        }
+        this.io.off(SocketIOModel.UPDATE_RECORDED_MAINTENANCE_EVENT, callback);
     }
 }
 
 namespace SocketIOModel {
     export const UPDATE_STATUS_EVENT = 'updateStatus';
     export const UPDATE_ENCODE_STATUS_EVENT = 'updateEncode';
+    export const UPDATE_RECORDED_MAINTENANCE_EVENT = 'updateRecordedMaintenance';
 }
 
 export default SocketIOModel;

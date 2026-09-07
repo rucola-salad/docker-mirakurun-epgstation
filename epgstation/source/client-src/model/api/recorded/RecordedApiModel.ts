@@ -1,7 +1,12 @@
 import { inject, injectable } from 'inversify';
 import * as apid from '../../../../../api';
 import IRepositoryModel from '../IRepositoryModel';
-import IRecordedApiModel, { ManualTsRepairResult, RebuildChaptersResult } from './IRecordedApiModel';
+import IRecordedApiModel, {
+    ManualTsRepairResult,
+    RebuildChaptersResult,
+    RecordedMaintenanceBulkAction,
+    RecordedMaintenanceBulkJob,
+} from './IRecordedApiModel';
 
 @injectable()
 export default class RecordedApiModel implements IRecordedApiModel {
@@ -66,5 +71,18 @@ export default class RecordedApiModel implements IRecordedApiModel {
     public async rebuildChapters(recordedId: apid.RecordedId): Promise<RebuildChaptersResult> {
         const result = await this.repository.post(`/recorded/${recordedId.toString(10)}/chapters`);
         return result.data;
+    }
+
+    public async getBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null> {
+        const result = await this.repository.get('/recorded/bulk-maintenance');
+        return result.data.job;
+    }
+
+    public async startBulkMaintenanceJob(
+        action: RecordedMaintenanceBulkAction,
+        recordedIds: apid.RecordedId[],
+    ): Promise<RecordedMaintenanceBulkJob> {
+        const result = await this.repository.post('/recorded/bulk-maintenance', { action, recordedIds });
+        return result.data.job;
     }
 }

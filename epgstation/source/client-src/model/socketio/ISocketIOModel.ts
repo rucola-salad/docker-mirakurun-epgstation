@@ -9,4 +9,6 @@ export default interface ISocketIOModel {
     offUpdateState(callback: () => void): void;
     onUpdateEncodeState(callback: () => void): void;
     offUpdateEncodeState(callback: () => void): void;
+    onUpdateRecordedMaintenance(callback: () => void): void;
+    offUpdateRecordedMaintenance(callback: () => void): void;
 }

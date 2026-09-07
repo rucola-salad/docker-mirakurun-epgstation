@@ -14,6 +14,35 @@ export interface RebuildChaptersResult {
     sourceName: string;
 }
 
+export type RecordedMaintenanceBulkAction = 'repair' | 'chapters';
+export type RecordedMaintenanceBulkItemState =
+    | 'queued'
+    | 'checking'
+    | 'repairing'
+    | 'rebuilding-chapters'
+    | 'completed'
+    | 'failed';
+
+export interface RecordedMaintenanceBulkItem {
+    recordedId: apid.RecordedId;
+    title: string;
+    state: RecordedMaintenanceBulkItemState;
+    message?: string;
+}
+
+export interface RecordedMaintenanceBulkJob {
+    id: string;
+    action: RecordedMaintenanceBulkAction;
+    state: 'running' | 'completed' | 'failed';
+    total: number;
+    completed: number;
+    failed: number;
+    currentRecordedId: apid.RecordedId | null;
+    currentTitle: string | null;
+    currentState: RecordedMaintenanceBulkItemState | null;
+    items: RecordedMaintenanceBulkItem[];
+}
+
 export default interface IRecordedApiModel {
     gets(option: apid.GetRecordedOption): Promise<apid.Records>;
     get(recordedId: apid.RecordedId, isHalfWidth: boolean): Promise<apid.RecordedItem>;
@@ -27,4 +56,6 @@ export default interface IRecordedApiModel {
     generateJikkyo(recordedId: apid.RecordedId): Promise<apid.GenerateJikkyoResult>;
     repair(recordedId: apid.RecordedId): Promise<ManualTsRepairResult>;
     rebuildChapters(recordedId: apid.RecordedId): Promise<RebuildChaptersResult>;
+    getBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null>;
+    startBulkMaintenanceJob(action: RecordedMaintenanceBulkAction, recordedIds: apid.RecordedId[]): Promise<RecordedMaintenanceBulkJob>;
 }

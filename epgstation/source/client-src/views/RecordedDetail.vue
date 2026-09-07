@@ -31,16 +31,12 @@
                             <div class="title font-weight-bold">
                                 {{ recorded.display.name }}
                                 <v-icon v-if="hasJikkyo === true" small class="ml-1" title="実況コメントあり">mdi-message-text</v-icon>
+                                <v-icon v-if="hasChapters === true" small class="ml-1" title="チャプターあり">mdi-format-list-bulleted</v-icon>
                             </div>
-                            <div class="subtitle-1 my-1">
-                                {{ recorded.display.channelName }}
-                            </div>
+                            <div class="subtitle-1 my-1">{{ recorded.display.channelName }}</div>
+                            <div class="subtitle-2 font-weight-light">{{ recorded.display.genre }}</div>
                             <div class="subtitle-2 font-weight-light">
-                                {{ recorded.display.genre }}
-                            </div>
-                            <div class="subtitle-2 font-weight-light">
-                                {{ recorded.display.time }} ({{ recorded.display.duration }}
-                                m)
+                                {{ recorded.display.time }} ({{ recorded.display.duration }} m)
                             </div>
                             <div class="body-2 mt-2 font-weight-light drop" v-bind:class="{ droped: recorded.display.hasDrop === true }" v-on:click="showDropLog">
                                 {{ recorded.display.drop }}
@@ -71,12 +67,8 @@
                         </div>
                     </div>
                     <div class="content-1 mt-6">
-                        <div class="body-2 description">
-                            {{ recorded.display.description }}
-                        </div>
-                        <div v-if="isHideExtend === false" ref="extend" class="mt-2 body-2 extended">
-                            {{ recorded.display.extended }}
-                        </div>
+                        <div class="body-2 description">{{ recorded.display.description }}</div>
+                        <div v-if="isHideExtend === false" ref="extend" class="mt-2 body-2 extended">{{ recorded.display.extended }}</div>
                     </div>
                     <RecordedDetailSelectStreamDialog></RecordedDetailSelectStreamDialog>
                     <DropLogDialog :isOpen.sync="isOpenDropLogDialog"></DropLogDialog>
@@ -145,33 +137,35 @@ export default class RecordedDetail extends Vue {
         return this.recordedDetailState.getRecorded();
     }
 
+    get hasJikkyo(): boolean {
+        const recorded = this.recordedDetailState.getRecorded();
+        return recorded !== null && typeof recorded.recordedItem.videoFiles !== 'undefined' && recorded.recordedItem.videoFiles.some(v => v.hasJikkyo === true);
+    }
+
+    get hasChapters(): boolean {
+        const recorded = this.recordedDetailState.getRecorded();
+        return recorded !== null && (recorded.recordedItem as any).hasChapters === true;
+    }
+
     public created(): void {
         this.settingValue = this.setting.getSavedValue();
-
-        // socket.io イベント
         this.socketIoModel.onUpdateState(this.onUpdateStatusCallback);
     }
 
     public beforeDestroy(): void {
-        // socket.io イベント
         this.socketIoModel.offUpdateState(this.onUpdateStatusCallback);
     }
 
     public async showDropLog(): Promise<void> {
         const recorded = this.recordedDetailState.getRecorded();
-        if (recorded === null || typeof recorded.recordedItem.dropLogFile === 'undefined') {
-            return;
-        }
+        if (recorded === null || typeof recorded.recordedItem.dropLogFile === 'undefined') return;
 
         this.dropLogState.setName(recorded.display.name);
         try {
             await this.dropLogState.fetchData(recorded.recordedItem.dropLogFile.id);
             this.isOpenDropLogDialog = true;
         } catch (err) {
-            this.snackbarState.open({
-                color: 'error',
-                text: 'ログファイル取得に失敗しました',
-            });
+            this.snackbarState.open({ color: 'error', text: 'ログファイル取得に失敗しました' });
         }
     }
 
@@ -179,17 +173,12 @@ export default class RecordedDetail extends Vue {
         if (video.type === 'encoded' && this.setting.getSavedValue().isPreferredPlayingOnWeb === true) {
             Util.move(this.$router, {
                 path: '/recorded/watch',
-                query: {
-                    videoId: video.id.toString(10),
-                    recordedId: this.$route.params.id,
-                },
+                query: { videoId: video.id.toString(10), recordedId: this.$route.params.id },
             });
-
             return;
         }
 
         const url = this.recordedDetailState.getVideoURL(video);
-
         location.href = url !== null ? url : this.recordedDetailState.getVideoPlayListURL(video);
     }
 
@@ -199,7 +188,6 @@ export default class RecordedDetail extends Vue {
 
     public downloadVideo(video: apid.VideoFile): void {
         const url = this.recordedDetailState.getVideoDownloadURL(video);
-
         location.href = url !== null ? url : this.recordedDetailState.getVideoDownloadRawURL(video);
     }
 
@@ -210,48 +198,27 @@ export default class RecordedDetail extends Vue {
     public async stopEncode(): Promise<void> {
         try {
             await this.recordedDetailState.stopEncode();
-            this.snackbarState.open({
-                color: 'success',
-                text: 'エンコード停止',
-            });
+            this.snackbarState.open({ color: 'success', text: 'エンコード停止' });
         } catch (err) {
-            this.snackbarState.open({
-                color: 'error',
-                text: 'エンコード停止に失敗',
-            });
+            this.snackbarState.open({ color: 'error', text: 'エンコード停止に失敗' });
         }
-    }
-
-    get hasJikkyo(): boolean {
-        const recorded = this.recordedDetailState.getRecorded();
-
-        return recorded !== null && typeof recorded.recordedItem.videoFiles !== 'undefined' && recorded.recordedItem.videoFiles.some(v => v.hasJikkyo === true);
     }
 
     public async generateJikkyo(): Promise<void> {
         const recorded = this.recordedDetailState.getRecorded();
-        if (recorded === null || this.isGeneratingJikkyo === true) {
-            return;
-        }
+        if (recorded === null || this.isGeneratingJikkyo === true) return;
 
         this.isGeneratingJikkyo = true;
-
         try {
             const result = await this.recordedApiModel.generateJikkyo(recorded.recordedItem.id);
-
             this.snackbarState.open({
                 color: 'success',
                 text: result.status === 'created' ? '実況XMLを生成しました' : '実況XMLは既に存在します',
             });
-
             await this.fetchData();
         } catch (err) {
             console.error(err);
-
-            this.snackbarState.open({
-                color: 'error',
-                text: '実況XML生成に失敗しました',
-            });
+            this.snackbarState.open({ color: 'error', text: '実況XML生成に失敗しました' });
         } finally {
             this.isGeneratingJikkyo = false;
         }
@@ -262,25 +229,16 @@ export default class RecordedDetail extends Vue {
         this.recordedDetailState.clearData();
         this.$nextTick(async () => {
             await this.fetchData().catch(err => {
-                this.snackbarState.open({
-                    color: 'error',
-                    text: '録画データ取得に失敗',
-                });
+                this.snackbarState.open({ color: 'error', text: '録画データ取得に失敗' });
                 console.error(err);
             });
-
-            // データ取得完了を通知
             await this.scrollState.emitDoneGetData();
         });
     }
 
-    /**
-     * データ取得
-     */
     private async fetchData(): Promise<void> {
         await this.recordedDetailState.fetchData(parseInt(this.$route.params.id, 10), this.settingValue === null ? true : this.settingValue.isHalfWidthDisplayed);
 
-        // 番組詳細 URL 処理
         this.$nextTick(() => {
             this.isHideExtend = true;
             this.$nextTick(() => {
@@ -311,7 +269,6 @@ $switch-display-width: 800px
     min-width: 100px
     max-height: 240px
     overflow: hidden
-
 
 .content-description
     margin-top: 8px
