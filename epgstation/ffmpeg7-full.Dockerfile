@@ -80,6 +80,7 @@ COPY ts-repair/audio-repair.c /tmp/audio-repair.c
 COPY ts-repair/audio-writer.c /tmp/audio-writer.c
 COPY ts-repair/audio-writer.h /tmp/audio-writer.h
 COPY ts-repair/video-repair.c /tmp/video-repair.c
+COPY ts-repair/ts-repair.sh /tmp/ts-repair.sh
 COPY ts-repair/ts-health-check.c /tmp/ts-health-check.c
 COPY ts-repair/ts-video-timeline.c /tmp/ts-video-timeline.c
 
@@ -203,6 +204,10 @@ RUN printf '%s\n' \
     > "${FFMPEG_PREFIX}/bin/video-repair" && \
     chmod 755 "${FFMPEG_PREFIX}/bin/video-repair"
 
+# TS Repair orchestrator
+RUN cp /tmp/ts-repair.sh "${FFMPEG_PREFIX}/bin/ts-repair" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/ts-repair"
+
 # ts-health-check wrapper
 RUN printf '%s\n' \
     '#!/bin/sh' \
@@ -235,6 +240,9 @@ RUN "${FFMPEG_PREFIX}/bin/ffmpeg" -version && \
     output="$("${FFMPEG_PREFIX}/bin/video-repair" 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$("${FFMPEG_PREFIX}/bin/ts-repair" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
     output="$("${FFMPEG_PREFIX}/bin/ts-health-check" 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
@@ -263,6 +271,9 @@ RUN "/opt/ffmpeg-7.0.2/bin/ffmpeg" -version && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
     output="$(/opt/ffmpeg-7.0.2/bin/video-repair 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$(/opt/ffmpeg-7.0.2/bin/ts-repair 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
     output="$(/opt/ffmpeg-7.0.2/bin/ts-health-check 2>&1 || true)" && \

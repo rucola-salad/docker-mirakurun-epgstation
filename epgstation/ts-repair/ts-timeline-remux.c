@@ -177,8 +177,9 @@ int main(int argc, char **argv)
     AVFormatContext *out = NULL;
 
     int *media_stream_map = NULL;
-    int subtitle_input_index = -1;
-    int subtitle_output_index = -1;
+    int *subtitle_stream_map = NULL;
+    int64_t *last_subtitle_pts = NULL;
+    int subtitle_stream_count = 0;
 
     TimelineMap timeline = {0};
 
@@ -193,7 +194,6 @@ int main(int argc, char **argv)
     int64_t subtitle_skipped = 0;
     int64_t subtitle_no_pts = 0;
     int64_t subtitle_backward = 0;
-    int64_t last_subtitle_pts = AV_NOPTS_VALUE;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--media") && i + 1 < argc) {
@@ -250,29 +250,47 @@ int main(int argc, char **argv)
     }
 
     /*
-     * First subtitle stream is used for this proof.
-     * For 3661 this is ARIB caption Profile A.
+     * Preserve every subtitle stream from the source TS.
+     *
+     * subtitle_stream_map is indexed by source stream index.
+     * A value of -1 means that the source stream is not a subtitle.
+     * The output stream indexes are assigned after the output
+     * context has been created.
      */
-    for (unsigned int i = 0; i < source->nb_streams; i++) {
-        if (source->streams[i]->codecpar->codec_type ==
-            AVMEDIA_TYPE_SUBTITLE) {
-            subtitle_input_index = (int)i;
-            break;
-        }
-    }
+    subtitle_stream_map =
+        malloc(source->nb_streams * sizeof(*subtitle_stream_map));
+    last_subtitle_pts =
+        malloc(source->nb_streams * sizeof(*last_subtitle_pts));
 
-    if (subtitle_input_index < 0) {
-        fprintf(stderr, "ERROR: source has no subtitle stream\n");
+    if (!subtitle_stream_map || !last_subtitle_pts) {
+        fprintf(stderr, "ERROR: out of memory\n");
         goto cleanup;
     }
 
-    fprintf(stderr,
-            "subtitle: input_stream=%d codec=%s time_base=%d/%d\n",
-            subtitle_input_index,
-            avcodec_get_name(
-                source->streams[subtitle_input_index]->codecpar->codec_id),
-            source->streams[subtitle_input_index]->time_base.num,
-            source->streams[subtitle_input_index]->time_base.den);
+    for (unsigned int i = 0; i < source->nb_streams; i++) {
+        subtitle_stream_map[i] = -1;
+        last_subtitle_pts[i] = AV_NOPTS_VALUE;
+
+        if (source->streams[i]->codecpar->codec_type ==
+            AVMEDIA_TYPE_SUBTITLE) {
+
+            subtitle_stream_count++;
+
+            fprintf(stderr,
+                    "subtitle: input_stream=%u codec=%s "
+                    "time_base=%d/%d\n",
+                    i,
+                    avcodec_get_name(
+                        source->streams[i]->codecpar->codec_id),
+                    source->streams[i]->time_base.num,
+                    source->streams[i]->time_base.den);
+        }
+    }
+
+    if (subtitle_stream_count == 0) {
+        fprintf(stderr, "ERROR: source has no subtitle stream\n");
+        goto cleanup;
+    }
 
     avret = avformat_alloc_output_context2(
         &out, NULL, "mpegts", output_path);
@@ -312,12 +330,19 @@ int main(int argc, char **argv)
                 avcodec_get_name(media->streams[i]->codecpar->codec_id));
     }
 
-    {
+    /*
+     * Add every source subtitle stream to the repaired output.
+     */
+    for (unsigned int i = 0; i < source->nb_streams; i++) {
         AVStream *subtitle_out = NULL;
+
+        if (source->streams[i]->codecpar->codec_type !=
+            AVMEDIA_TYPE_SUBTITLE)
+            continue;
 
         avret = copy_stream(
             out,
-            source->streams[subtitle_input_index],
+            source->streams[i],
             &subtitle_out);
 
         if (avret < 0) {
@@ -325,7 +350,12 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
-        subtitle_output_index = subtitle_out->index;
+        subtitle_stream_map[i] = subtitle_out->index;
+
+        fprintf(stderr,
+                "subtitle: input_stream=%u -> output_stream=%d\n",
+                i,
+                subtitle_out->index);
     }
 
     if (!(out->oformat->flags & AVFMT_NOFILE)) {
@@ -348,11 +378,6 @@ int main(int argc, char **argv)
     {
         AVPacket *media_pkt = av_packet_alloc();
         AVPacket *subtitle_pkt = av_packet_alloc();
-
-        AVStream *subtitle_in =
-            source->streams[subtitle_input_index];
-        AVStream *subtitle_out =
-            out->streams[subtitle_output_index];
 
         int media_have = 0;
         int subtitle_have = 0;
@@ -419,12 +444,35 @@ int main(int argc, char **argv)
                     int dts_mapped = 0;
                     int64_t new_pts;
                     int64_t new_dts;
+                    int subtitle_input_index;
+                    int subtitle_output_index;
+                    AVStream *subtitle_in;
+                    AVStream *subtitle_out;
 
-                    if (subtitle_pkt->stream_index !=
-                        subtitle_input_index) {
+                    subtitle_input_index =
+                        subtitle_pkt->stream_index;
+
+                    if (subtitle_input_index < 0 ||
+                        (unsigned int)subtitle_input_index >=
+                            source->nb_streams ||
+                        subtitle_stream_map[
+                            subtitle_input_index] < 0) {
+
                         av_packet_unref(subtitle_pkt);
                         continue;
                     }
+
+                    subtitle_output_index =
+                        subtitle_stream_map[
+                            subtitle_input_index];
+
+                    subtitle_in =
+                        source->streams[
+                            subtitle_input_index];
+
+                    subtitle_out =
+                        out->streams[
+                            subtitle_output_index];
 
                     subtitle_packets++;
 
@@ -473,13 +521,16 @@ int main(int argc, char **argv)
                         subtitle_in->time_base,
                         subtitle_out->time_base);
 
-                    if (last_subtitle_pts !=
+                    if (last_subtitle_pts[
+                            subtitle_input_index] !=
                             AV_NOPTS_VALUE &&
                         subtitle_pkt->pts <
-                            last_subtitle_pts)
+                            last_subtitle_pts[
+                                subtitle_input_index])
                         subtitle_backward++;
 
-                    last_subtitle_pts =
+                    last_subtitle_pts[
+                        subtitle_input_index] =
                         subtitle_pkt->pts;
 
                     if (subtitle_pkt->duration > 0) {
@@ -601,11 +652,13 @@ int main(int argc, char **argv)
 
     fprintf(stderr,
             "\nsubtitle summary:\n"
+            "  streams   = %d\n"
             "  packets   = %" PRId64 "\n"
             "  mapped    = %" PRId64 "\n"
             "  skipped   = %" PRId64 "\n"
             "  no_pts    = %" PRId64 "\n"
             "  backward  = %" PRId64 "\n",
+            subtitle_stream_count,
             subtitle_packets,
             subtitle_mapped,
             subtitle_skipped,
@@ -622,6 +675,8 @@ cleanup:
     avformat_close_input(&source);
     avformat_close_input(&media);
 
+    free(last_subtitle_pts);
+    free(subtitle_stream_map);
     free(media_stream_map);
     timeline_map_free(&timeline);
 
