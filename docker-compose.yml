@@ -58,7 +58,7 @@ services:
 
     epgstation:
         container_name: epgstation-v2
-        image: epgstation-v2:ffmpeg7-full-vaapi-fixed
+        image: epgstation-v2:main-integration-ts-repair
         volumes:
             - /etc/localtime:/etc/localtime:ro
             - ./epgstation/config:/app/config
@@ -66,10 +66,13 @@ services:
             - ./epgstation/thumbnail:/app/thumbnail
             - ./epgstation/logs:/app/logs
             - /media/tv_record:/app/recorded
+            - /mnt/hdd1/ts-repair-work/epgstation-runtime:/app/ts-repair-work
         devices:
             - /dev/dri:/dev/dri
         environment:
             TZ: "Asia/Tokyo"
+            TS_REPAIR_WORK_ROOT: "/app/ts-repair-work"
+            TS_REPAIR_PATH: "/opt/ffmpeg-7.0.2/bin/ts-repair"
         depends_on:
             - mirakurun
             - mysql

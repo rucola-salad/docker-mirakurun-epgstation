@@ -1,3 +1,4 @@
+import * as apid from '../../../../api';
 import Recorded from '../../../db/entities/Recorded';
 import Reserve from '../../../db/entities/Reserve';
 import { OperatorFinishEncodeInfo } from '../../event/IOperatorEncodeEvent';
@@ -8,7 +9,7 @@ export default interface IExternalCommandManageModel {
     addRecordingPrepStartCmd(reserve: Reserve): void;
     addRecordingPrepRecFailedCmd(reserve: Reserve): void;
     addRecordingStartCmd(recorded: Recorded): void;
-    addRecordingFinishCmd(recorded: Recorded): void;
+    addRecordingFinishCmd(recorded: Recorded, videoFileId?: apid.VideoFileId | null): void;
     addRecordingFailedCmd(recorded: Recorded): void;
     addEncodingFinishCmd(info: OperatorFinishEncodeInfo): void;
 }

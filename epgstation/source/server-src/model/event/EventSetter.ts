@@ -11,6 +11,7 @@ import IRecordedTagManadeModel from '../operator/recordedTag/IRecordedTagManadeM
 import IRecordingManageModel from '../operator/recording/IRecordingManageModel';
 import IReservationManageModel from '../operator/reservation/IReservationManageModel';
 import IThumbnailManageModel from '../operator/thumbnail/IThumbnailManageModel';
+import ITsRepairManageModel from '../operator/tsRepair/ITsRepairManageModel';
 import IOperatorEncodeEvent from './IOperatorEncodeEvent';
 import IEPGUpdateEvent from './IEPGUpdateEvent';
 import IEventSetter from './IEventSetter';
@@ -37,6 +38,7 @@ export default class EventSetter implements IEventSetter {
     private recordedManage: IRecordedManageModel;
     private recordedTagManage: IRecordedTagManadeModel;
     private thumbnailManage: IThumbnailManageModel;
+    private tsRepairManage: ITsRepairManageModel;
     private externalCommandManage: IExternalCommandManageModel;
     private ipc: IIPCServer;
     private config: IConfigFile;
@@ -59,6 +61,7 @@ export default class EventSetter implements IEventSetter {
         @inject('IRecordedManageModel') recordedManage: IRecordedManageModel,
         @inject('IRecordedTagManadeModel') recordedTagManage: IRecordedTagManadeModel,
         @inject('IThumbnailManageModel') thumbnailManage: IThumbnailManageModel,
+        @inject('ITsRepairManageModel') tsRepairManage: ITsRepairManageModel,
         @inject('IExternalCommandManageModel') externalCommandManage: IExternalCommandManageModel,
         @inject('IIPCServer') ipc: IIPCServer,
         @inject('IConfiguration') configure: IConfiguration,
@@ -77,6 +80,7 @@ export default class EventSetter implements IEventSetter {
         this.recordedManage = recordedManage;
         this.recordedTagManage = recordedTagManage;
         this.thumbnailManage = thumbnailManage;
+        this.tsRepairManage = tsRepairManage;
         this.externalCommandManage = externalCommandManage;
         this.ipc = ipc;
         this.config = configure.getConfig();
@@ -199,15 +203,38 @@ export default class EventSetter implements IEventSetter {
                 }
             }
 
+            let primaryVideoFileId: apid.VideoFileId | null = null;
+
             if (typeof recorded.videoFiles !== 'undefined' && recorded.videoFiles.length > 0) {
+                primaryVideoFileId = recorded.videoFiles[0].id;
+
+                /*
+                 * New recordings already have drop information calculated before
+                 * FinishRecording is emitted. Repair only recordings with packet drops.
+                 *
+                 * If repair cannot run or fails, keep the original TS as primary.
+                 */
+                const dropCnt = recorded.dropLogFile?.dropCnt;
+
+                if (typeof dropCnt === 'number' && dropCnt > 0) {
+                    const repairedVideoFileId = await this.tsRepairManage.repair(
+                        recorded,
+                        primaryVideoFileId,
+                    );
+
+                    if (repairedVideoFileId !== null) {
+                        primaryVideoFileId = repairedVideoFileId;
+                    }
+                }
+
                 // サムネイル作成
-                this.thumbnailManage.add(recorded.videoFiles[0].id);
+                this.thumbnailManage.add(primaryVideoFileId);
 
                 // エンコード追加 1
                 if (reserve.encodeMode1 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: recorded.videoFiles[0].id,
+                        sourceVideoFileId: primaryVideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName1 === null
                                 ? this.config.recorded[0].name
@@ -223,7 +250,7 @@ export default class EventSetter implements IEventSetter {
                 if (reserve.encodeMode2 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: recorded.videoFiles[0].id,
+                        sourceVideoFileId: primaryVideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName2 === null
                                 ? this.config.recorded[0].name
@@ -239,7 +266,7 @@ export default class EventSetter implements IEventSetter {
                 if (reserve.encodeMode3 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: recorded.videoFiles[0].id,
+                        sourceVideoFileId: primaryVideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName3 === null
                                 ? this.config.recorded[0].name
@@ -261,7 +288,7 @@ export default class EventSetter implements IEventSetter {
             }
 
             // コマンド実行
-            this.externalCommandManage.addRecordingFinishCmd(recorded);
+            this.externalCommandManage.addRecordingFinishCmd(recorded, primaryVideoFileId);
 
             this.ipc.notifyClient();
         });

@@ -15,6 +15,7 @@ import ILogger from '../../ILogger';
 import ILoggerModel from '../../ILoggerModel';
 import { IPromiseQueue } from '../../IPromiseQueue';
 import IExternalCommandManageModel from './IExternalCommandManageModel';
+import * as apid from '../../../../api';
 
 @injectable()
 export default class ExternalCommandManageModel implements IExternalCommandManageModel {
@@ -117,12 +118,12 @@ export default class ExternalCommandManageModel implements IExternalCommandManag
      * 録画終了時のコマンド実行を queue に追加する
      * @param recorded: Recorded
      */
-    public addRecordingFinishCmd(recorded: Recorded): void {
+    public addRecordingFinishCmd(recorded: Recorded, videoFileId?: apid.VideoFileId | null): void {
         if (typeof this.config.recordingFinishCommand === 'undefined') {
             return;
         }
 
-        this.addRecorded(this.config.recordingFinishCommand, recorded);
+        this.addRecorded(this.config.recordingFinishCommand, recorded, videoFileId);
     }
 
     /**
@@ -169,9 +170,13 @@ export default class ExternalCommandManageModel implements IExternalCommandManag
      * @param cmd: string コマンド
      * @param reserve: Recorded
      */
-    private addRecorded(cmd: string, reserve: Recorded): void {
+    private addRecorded(
+        cmd: string,
+        reserve: Recorded,
+        videoFileId?: apid.VideoFileId | null,
+    ): void {
         this.queue.add<void>(() => {
-            return this.createRecordedCmd(cmd, reserve).catch(err => {
+            return this.createRecordedCmd(cmd, reserve, videoFileId).catch(err => {
                 this.log.system.error(`execute cmd error: ${cmd}`);
                 this.log.system.error(err);
             });
@@ -256,7 +261,11 @@ export default class ExternalCommandManageModel implements IExternalCommandManag
      * @param cmd: string
      * @param recorded: Recorded
      */
-    private async createRecordedCmd(cmd: string, recorded: Recorded): Promise<void> {
+    private async createRecordedCmd(
+        cmd: string,
+        recorded: Recorded,
+        videoFileId?: apid.VideoFileId | null,
+    ): Promise<void> {
         this.log.system.info(`execute cmd: ${cmd}`);
 
         const cmds = ProcessUtil.parseCmdStr(cmd);
@@ -284,9 +293,11 @@ export default class ExternalCommandManageModel implements IExternalCommandManag
                     EXTENDED: recorded.extended,
                     HALF_WIDTH_EXTENDED: recorded.halfWidthExtended,
                     RECPATH:
-                        typeof recorded.videoFiles === 'undefined' || recorded.videoFiles.length < 0
-                            ? null
-                            : await this.videoUtil.getFullFilePathFromId(recorded.videoFiles[0].id),
+                        typeof videoFileId === 'number'
+                            ? await this.videoUtil.getFullFilePathFromId(videoFileId)
+                            : typeof recorded.videoFiles === 'undefined' || recorded.videoFiles.length === 0
+                              ? null
+                              : await this.videoUtil.getFullFilePathFromId(recorded.videoFiles[0].id),
                     LOGPATH:
                         typeof recorded.dropLogFile === 'undefined' || recorded.dropLogFile === null
                             ? null
