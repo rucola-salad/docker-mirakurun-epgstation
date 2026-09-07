@@ -27,6 +27,14 @@
                     <v-list-item-icon class="mr-3"><v-icon>mdi-format-list-bulleted</v-icon></v-list-item-icon>
                     <v-list-item-content><v-list-item-title>チャプター再作成</v-list-item-title></v-list-item-content>
                 </v-list-item>
+                <v-list-item
+                    v-if="recordedItem.isRecording === false"
+                    :disabled="isGeneratingJikkyo || hasJikkyo"
+                    v-on:click="generateJikkyo"
+                >
+                    <v-list-item-icon class="mr-3"><v-icon>mdi-comment-text-outline</v-icon></v-list-item-icon>
+                    <v-list-item-content><v-list-item-title>実況XML生成</v-list-item-title></v-list-item-content>
+                </v-list-item>
                 <v-list-item v-if="recordedItem.isProtected === true" v-on:click="unprotect">
                     <v-list-item-icon class="mr-3"><v-icon>mdi-lock-open</v-icon></v-list-item-icon>
                     <v-list-item-content><v-list-item-title>unprotect</v-list-item-title></v-list-item-content>
@@ -77,6 +85,12 @@ import * as apid from '../../../../../api';
 export default class RecordedDetailMoreButton extends Vue {
     @Prop({ required: true })
     public recordedItem!: apid.RecordedItem;
+
+    @Prop({ default: false })
+    public isGeneratingJikkyo!: boolean;
+
+    @Prop({ default: false })
+    public hasJikkyo!: boolean;
 
     public isOpened: boolean = false;
     public isOpenDeleteDialog: boolean = false;
@@ -142,6 +156,14 @@ export default class RecordedDetailMoreButton extends Vue {
         } finally {
             this.isRebuildingChapters = false;
         }
+    }
+
+    public generateJikkyo(): void {
+        if (this.isGeneratingJikkyo || this.hasJikkyo) {
+            return;
+        }
+        this.isOpened = false;
+        this.$emit('generateJikkyo');
     }
 
     public async unprotect(): Promise<void> {
