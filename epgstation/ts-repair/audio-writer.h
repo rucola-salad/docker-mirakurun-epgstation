@@ -16,6 +16,12 @@ int audio_writer_write(AudioWriter *writer,
                        int64_t target_sample,
                        const AVFrame *frame);
 
+int audio_writer_write_samples(AudioWriter *writer,
+                               int64_t target_sample,
+                               const AVFrame *frame,
+                               int source_sample,
+                               int nb_samples);
+
 int audio_writer_accepts_frame(const AudioWriter *writer,
                                const AVFrame *frame);
 

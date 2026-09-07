@@ -129,13 +129,16 @@ int audio_writer_accepts_frame(const AudioWriter *writer,
            frame->ch_layout.nb_channels == writer->channels;
 }
 
-int audio_writer_write(AudioWriter *writer,
-                       int64_t target_sample,
-                       const AVFrame *frame)
+int audio_writer_write_samples(AudioWriter *writer,
+                               int64_t target_sample,
+                               const AVFrame *frame,
+                               int source_sample,
+                               int nb_samples)
 {
     int ch;
     size_t bytes;
-    off_t offset;
+    size_t source_offset;
+    off_t target_offset;
 
     if (!writer || !frame || target_sample < 0)
         return -1;
@@ -157,11 +160,25 @@ int audio_writer_write(AudioWriter *writer,
         return -1;
     }
 
-    if (frame->nb_samples <= 0)
+    if (source_sample < 0 ||
+        nb_samples < 0 ||
+        source_sample > frame->nb_samples ||
+        nb_samples > frame->nb_samples - source_sample) {
+        fprintf(stderr,
+                "ERROR: invalid audio sample range: "
+                "source_sample=%d nb_samples=%d frame_samples=%d\n",
+                source_sample,
+                nb_samples,
+                frame->nb_samples);
+        return -1;
+    }
+
+    if (nb_samples == 0)
         return 0;
 
-    bytes = (size_t)frame->nb_samples * sizeof(float);
-    offset = (off_t)target_sample * (off_t)sizeof(float);
+    bytes = (size_t)nb_samples * sizeof(float);
+    source_offset = (size_t)source_sample * sizeof(float);
+    target_offset = (off_t)target_sample * (off_t)sizeof(float);
 
     for (ch = 0; ch < writer->channels; ch++) {
         const uint8_t *src = frame->extended_data[ch];
@@ -174,12 +191,14 @@ int audio_writer_write(AudioWriter *writer,
             return -1;
         }
 
+        src += source_offset;
+
         while (done < bytes) {
             ssize_t n =
                 pwrite(writer->fds[ch],
                        src + done,
                        bytes - done,
-                       offset + (off_t)done);
+                       target_offset + (off_t)done);
 
             if (n < 0) {
                 if (errno == EINTR)
@@ -205,13 +224,27 @@ int audio_writer_write(AudioWriter *writer,
 
     {
         int64_t end_sample =
-            target_sample + frame->nb_samples;
+            target_sample + nb_samples;
 
         if (end_sample > writer->max_written_sample)
             writer->max_written_sample = end_sample;
     }
 
     return 0;
+}
+
+int audio_writer_write(AudioWriter *writer,
+                       int64_t target_sample,
+                       const AVFrame *frame)
+{
+    if (!frame)
+        return -1;
+
+    return audio_writer_write_samples(writer,
+                                      target_sample,
+                                      frame,
+                                      0,
+                                      frame->nb_samples);
 }
 
 int64_t audio_writer_max_written_sample(const AudioWriter *writer)

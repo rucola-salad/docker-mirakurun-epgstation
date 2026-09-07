@@ -74,15 +74,40 @@ RUN mkdir -p /tmp/ffmpeg-build && \
 
 # Build TS timeline remux helper against this FFmpeg 7 installation.
 COPY ts-repair/ts-timeline-remux.c /tmp/ts-timeline-remux.c
+COPY ts-repair/timeline-map.c /tmp/timeline-map.c
+COPY ts-repair/timeline-map.h /tmp/timeline-map.h
+COPY ts-repair/audio-repair.c /tmp/audio-repair.c
+COPY ts-repair/audio-writer.c /tmp/audio-writer.c
+COPY ts-repair/audio-writer.h /tmp/audio-writer.h
+COPY ts-repair/video-repair.c /tmp/video-repair.c
 COPY ts-repair/ts-health-check.c /tmp/ts-health-check.c
 COPY ts-repair/ts-video-timeline.c /tmp/ts-video-timeline.c
 
 RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
-    cc -O2 -Wall -Wextra \
+    cc -O2 -Wall -Wextra -I/tmp \
        /tmp/ts-timeline-remux.c \
+       /tmp/timeline-map.c \
        -o "${FFMPEG_PREFIX}/bin/ts-timeline-remux.real" \
        $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
          pkg-config --cflags --libs libavformat libavcodec libavutil)
+
+RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+    cc -O2 -Wall -Wextra -I/tmp \
+       /tmp/audio-repair.c \
+       /tmp/audio-writer.c \
+       /tmp/timeline-map.c \
+       -o "${FFMPEG_PREFIX}/bin/audio-repair.real" \
+       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+         pkg-config --cflags --libs libavformat libavcodec libavutil) \
+       -lm
+
+RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+    cc -O2 -Wall -Wextra \
+       /tmp/video-repair.c \
+       -o "${FFMPEG_PREFIX}/bin/video-repair.real" \
+       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
+         pkg-config --cflags --libs libavformat libavcodec libavutil) \
+       -lm
 
 RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
     cc -O2 -Wall -Wextra \
@@ -104,6 +129,8 @@ RUN mkdir -p "${FFMPEG_PREFIX}/lib/runtime" && \
         lddtree -l "${FFMPEG_PREFIX}/bin/ffmpeg"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ffprobe"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ts-timeline-remux.real"; \
+        lddtree -l "${FFMPEG_PREFIX}/bin/audio-repair.real"; \
+        lddtree -l "${FFMPEG_PREFIX}/bin/video-repair.real"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ts-health-check.real"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ts-video-timeline.real"; \
     } \
@@ -156,6 +183,26 @@ RUN printf '%s\n' \
     > "${FFMPEG_PREFIX}/bin/ts-timeline-remux" && \
     chmod 755 "${FFMPEG_PREFIX}/bin/ts-timeline-remux"
 
+# audio-repair wrapper
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+    'PREFIX="$(dirname "$SELF_DIR")"' \
+    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+    'exec "$SELF_DIR/audio-repair.real" "$@"' \
+    > "${FFMPEG_PREFIX}/bin/audio-repair" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/audio-repair"
+
+# video-repair wrapper
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+    'PREFIX="$(dirname "$SELF_DIR")"' \
+    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+    'exec "$SELF_DIR/video-repair.real" "$@"' \
+    > "${FFMPEG_PREFIX}/bin/video-repair" && \
+    chmod 755 "${FFMPEG_PREFIX}/bin/video-repair"
+
 # ts-health-check wrapper
 RUN printf '%s\n' \
     '#!/bin/sh' \
@@ -182,6 +229,12 @@ RUN "${FFMPEG_PREFIX}/bin/ffmpeg" -version && \
     output="$("${FFMPEG_PREFIX}/bin/ts-timeline-remux" 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$("${FFMPEG_PREFIX}/bin/audio-repair" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$("${FFMPEG_PREFIX}/bin/video-repair" 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
     output="$("${FFMPEG_PREFIX}/bin/ts-health-check" 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
@@ -204,6 +257,12 @@ COPY --from=ffmpeg-builder \
 RUN "/opt/ffmpeg-7.0.2/bin/ffmpeg" -version && \
     "/opt/ffmpeg-7.0.2/bin/ffprobe" -version && \
     output="$(/opt/ffmpeg-7.0.2/bin/ts-timeline-remux 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$(/opt/ffmpeg-7.0.2/bin/audio-repair 2>&1 || true)" && \
+    printf '%s\n' "$output" && \
+    printf '%s\n' "$output" | grep '^Usage:' && \
+    output="$(/opt/ffmpeg-7.0.2/bin/video-repair 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
     output="$(/opt/ffmpeg-7.0.2/bin/ts-health-check 2>&1 || true)" && \

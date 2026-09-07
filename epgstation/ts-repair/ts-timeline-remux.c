@@ -8,162 +8,15 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/codec_par.h>
 #include <libavutil/avutil.h>
+
+#include "timeline-map.h"
 #include <libavutil/mathematics.h>
-
-typedef struct {
-    double src_pts;
-    double repaired_time;
-} TimelinePoint;
-
-typedef struct {
-    TimelinePoint *points;
-    size_t count;
-} TimelineMap;
 
 static void print_error(const char *what, int err)
 {
     char buf[AV_ERROR_MAX_STRING_SIZE];
     av_strerror(err, buf, sizeof(buf));
     fprintf(stderr, "ERROR: %s: %s\n", what, buf);
-}
-
-static int compare_timeline_point_by_src_pts(const void *lhs,
-                                             const void *rhs)
-{
-    const TimelinePoint *a = lhs;
-    const TimelinePoint *b = rhs;
-
-    if (a->src_pts < b->src_pts)
-        return -1;
-    if (a->src_pts > b->src_pts)
-        return 1;
-
-    /*
-     * Damaged input may contain duplicate source PTS values.
-     * Keep ordering deterministic by using repaired time as a tie-breaker.
-     */
-    if (a->repaired_time < b->repaired_time)
-        return -1;
-    if (a->repaired_time > b->repaired_time)
-        return 1;
-
-    return 0;
-}
-
-static int load_timeline_map(const char *path, TimelineMap *map)
-{
-    FILE *fp = NULL;
-    TimelinePoint *points = NULL;
-    size_t count = 0;
-    size_t capacity = 0;
-    double src_pts;
-    double repaired_time;
-
-    memset(map, 0, sizeof(*map));
-
-    fp = fopen(path, "r");
-    if (!fp) {
-        fprintf(stderr, "ERROR: cannot open map: %s: %s\n",
-                path, strerror(errno));
-        return -1;
-    }
-
-    while (fscanf(fp, "%lf %lf", &src_pts, &repaired_time) == 2) {
-        if (count == capacity) {
-            size_t new_capacity = capacity ? capacity * 2 : 4096;
-            TimelinePoint *new_points =
-                realloc(points, new_capacity * sizeof(*new_points));
-
-            if (!new_points) {
-                fprintf(stderr, "ERROR: out of memory loading map\n");
-                free(points);
-                fclose(fp);
-                return -1;
-            }
-
-            points = new_points;
-            capacity = new_capacity;
-        }
-
-        points[count].src_pts = src_pts;
-        points[count].repaired_time = repaired_time;
-        count++;
-    }
-
-    fclose(fp);
-
-    if (count < 2) {
-        fprintf(stderr, "ERROR: timeline map has too few points: %zu\n",
-                count);
-        free(points);
-        return -1;
-    }
-
-    /*
-     * 3661-full-video-map.txt is in decoded video order.
-     * Damaged TS timestamps can move backwards, while subtitle mapping needs
-     * lookup by original PTS. Sort a private copy by source PTS.
-     */
-    qsort(points,
-          count,
-          sizeof(*points),
-          compare_timeline_point_by_src_pts);
-
-    map->points = points;
-    map->count = count;
-
-    fprintf(stderr,
-            "timeline: points=%zu src=[%.6f .. %.6f] repaired=[%.6f .. %.6f]\n",
-            count,
-            points[0].src_pts,
-            points[count - 1].src_pts,
-            points[0].repaired_time,
-            points[count - 1].repaired_time);
-
-    return 0;
-}
-
-static int map_time(const TimelineMap *map,
-                    double src_pts,
-                    double *repaired_time)
-{
-    size_t lo;
-    size_t hi;
-
-    if (src_pts < map->points[0].src_pts ||
-        src_pts > map->points[map->count - 1].src_pts) {
-        return -1;
-    }
-
-    lo = 0;
-    hi = map->count - 1;
-
-    while (hi - lo > 1) {
-        size_t mid = lo + (hi - lo) / 2;
-
-        if (map->points[mid].src_pts <= src_pts)
-            lo = mid;
-        else
-            hi = mid;
-    }
-
-    {
-        const TimelinePoint *a = &map->points[lo];
-        const TimelinePoint *b = &map->points[hi];
-        double span = b->src_pts - a->src_pts;
-
-        if (fabs(span) < 1e-12) {
-            *repaired_time = a->repaired_time;
-            return 0;
-        }
-
-        *repaired_time =
-            a->repaired_time +
-            (src_pts - a->src_pts) *
-            (b->repaired_time - a->repaired_time) / span;
-    }
-
-    return 0;
 }
 
 static int find_first_video_pts(const char *path,
@@ -266,7 +119,7 @@ static int64_t map_timestamp(const TimelineMap *map,
 
     src_time = ts * av_q2d(tb);
 
-    if (map_time(map, src_time, &dst_time) < 0)
+    if (timeline_map_time(map, src_time, &dst_time) != 0)
         return AV_NOPTS_VALUE;
 
     *mapped = 1;
@@ -362,7 +215,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    if (load_timeline_map(map_path, &timeline) < 0)
+    if (timeline_map_load(map_path, &timeline) < 0)
         goto cleanup;
 
     avret = find_first_video_pts(
@@ -770,7 +623,7 @@ cleanup:
     avformat_close_input(&media);
 
     free(media_stream_map);
-    free(timeline.points);
+    timeline_map_free(&timeline);
 
     return ret;
 }
