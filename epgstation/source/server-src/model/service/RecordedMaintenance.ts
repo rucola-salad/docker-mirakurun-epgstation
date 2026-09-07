@@ -195,7 +195,7 @@ export const rebuildRecordedChapters = async (
     return {
         status: 'accepted',
         sourceVideoFileId: source.id,
-        sourceType: source.type,
+        sourceType: source.type as 'ts' | 'encoded',
         sourceName: source.name,
     };
 };
