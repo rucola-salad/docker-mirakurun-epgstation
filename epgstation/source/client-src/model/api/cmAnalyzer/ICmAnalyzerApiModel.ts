@@ -31,6 +31,20 @@ export interface ICmAnalyzerKeepRange {
     endFrame: number;
 }
 
+export type CmAnalyzerCutRangeKind =
+    'head' |
+    'cm' |
+    'other' |
+    'tail';
+
+export interface ICmAnalyzerCutRange {
+    startFrame: number;
+    endFrame: number;
+    startTime: number;
+    endTime: number;
+    kind: CmAnalyzerCutRangeKind;
+}
+
 export interface ICmAnalyzerAnalysis {
     version: number;
     recordedId: string;
@@ -41,6 +55,9 @@ export interface ICmAnalyzerAnalysis {
         chapters: ICmAnalyzerChapter[];
         cmRanges: ICmAnalyzerCmRange[];
         keepRanges: ICmAnalyzerKeepRange[];
+        cutRanges?: ICmAnalyzerCutRange[];
+        playbackStart?: number;
+        playbackEnd?: number;
     };
 }
 

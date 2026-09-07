@@ -152,17 +152,98 @@ function copyDirectory(src, dst) {
     }
 }
 
-function spawnAndWait(command, args, options = {}) {
+let currentAnalysisChild = null;
+const canceledRecordedIds = new Set();
+
+function terminateAnalysisChild(child) {
+    if (
+        child === null ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+    ) {
+        return;
+    }
+
+    /*
+     * JLSE は内部で複数プロセスを起動するため、
+     * Linux ではプロセスグループ全体へ SIGTERM を送る。
+     */
+    try {
+        if (child.pid) {
+            process.kill(-child.pid, 'SIGTERM');
+            return;
+        }
+    } catch (_) {
+        // process group kill に失敗した場合は直接 kill へフォールバック
+    }
+
+    try {
+        child.kill('SIGTERM');
+    } catch (_) {
+        // already exited
+    }
+}
+
+function spawnAndWait(
+    command,
+    args,
+    options = {},
+    recordedId = null
+) {
     return new Promise((resolve, reject) => {
+        const childOptions =
+            recordedId === null
+                ? options
+                : {
+                    ...options,
+                    detached: true,
+                };
+
         const child = spawn(
             command,
             args,
-            options
+            childOptions
         );
 
-        child.once('error', reject);
+        if (recordedId !== null) {
+            currentAnalysisChild = child;
+
+            if (canceledRecordedIds.has(String(recordedId))) {
+                terminateAnalysisChild(child);
+            }
+        }
+
+        child.once('error', err => {
+            if (
+                recordedId !== null &&
+                currentAnalysisChild === child
+            ) {
+                currentAnalysisChild = null;
+            }
+
+            reject(err);
+        });
 
         child.once('exit', (code, signal) => {
+            if (
+                recordedId !== null &&
+                currentAnalysisChild === child
+            ) {
+                currentAnalysisChild = null;
+            }
+
+            if (
+                recordedId !== null &&
+                canceledRecordedIds.has(String(recordedId))
+            ) {
+                reject(
+                    new Error(
+                        `analysis canceled: recordedId=${recordedId}`
+                    )
+                );
+                return;
+            }
+
             if (code === 0) {
                 resolve();
                 return;
@@ -179,7 +260,12 @@ function spawnAndWait(command, args, options = {}) {
 }
 
 
-function spawnAndCapture(command, args, options = {}) {
+function spawnAndCapture(
+    command,
+    args,
+    options = {},
+    recordedId = null
+) {
     return new Promise((resolve, reject) => {
         const child = spawn(
             command,
@@ -191,8 +277,21 @@ function spawnAndCapture(command, args, options = {}) {
                     'pipe',
                     'pipe',
                 ],
+                detached: recordedId !== null,
             }
         );
+
+        if (recordedId !== null) {
+            currentAnalysisChild = child;
+
+            if (
+                canceledRecordedIds.has(
+                    String(recordedId)
+                )
+            ) {
+                terminateAnalysisChild(child);
+            }
+        }
 
         let stdout = '';
         let stderr = '';
@@ -209,9 +308,39 @@ function spawnAndCapture(command, args, options = {}) {
             process.stderr.write(text);
         });
 
-        child.once('error', reject);
+        child.once('error', err => {
+            if (
+                recordedId !== null &&
+                currentAnalysisChild === child
+            ) {
+                currentAnalysisChild = null;
+            }
+
+            reject(err);
+        });
 
         child.once('exit', (code, signal) => {
+            if (
+                recordedId !== null &&
+                currentAnalysisChild === child
+            ) {
+                currentAnalysisChild = null;
+            }
+
+            if (
+                recordedId !== null &&
+                canceledRecordedIds.has(
+                    String(recordedId)
+                )
+            ) {
+                reject(
+                    new Error(
+                        `analysis canceled: recordedId=${recordedId}`
+                    )
+                );
+                return;
+            }
+
             if (code === 0) {
                 resolve({
                     stdout,
@@ -230,7 +359,107 @@ function spawnAndCapture(command, args, options = {}) {
     });
 }
 
-async function getVideoFrameRate(inputPath) {
+async function getVideoMetadata(
+    inputPath,
+    recordedId = null
+) {
+    const result =
+        await spawnAndCapture(
+            FFPROBE_COMMAND,
+            [
+                '-v',
+                'error',
+                '-select_streams',
+                'v:0',
+                '-show_entries',
+                'stream=avg_frame_rate,duration',
+                '-of',
+                'json',
+                inputPath,
+            ],
+            {},
+            recordedId
+        );
+
+    let probe;
+
+    try {
+        probe =
+            JSON.parse(result.stdout);
+    } catch (err) {
+        throw new Error(
+            `invalid ffprobe json: ${result.stdout.trim()}`
+        );
+    }
+
+    const stream =
+        probe &&
+        Array.isArray(probe.streams) &&
+        probe.streams.length > 0
+            ? probe.streams[0]
+            : null;
+
+    if (!stream) {
+        throw new Error(
+            'video stream not found'
+        );
+    }
+
+    const frameRateText =
+        String(stream.avg_frame_rate || '');
+
+    const parts =
+        frameRateText.split('/');
+
+    let frameRate;
+
+    if (parts.length === 2) {
+        const numerator =
+            Number(parts[0]);
+        const denominator =
+            Number(parts[1]);
+
+        frameRate =
+            denominator !== 0
+                ? numerator / denominator
+                : 0;
+    } else {
+        frameRate =
+            Number(frameRateText);
+    }
+
+    if (
+        !Number.isFinite(frameRate) ||
+        frameRate <= 0
+    ) {
+        throw new Error(
+            `invalid video frame rate: ${frameRateText}`
+        );
+    }
+
+    const duration =
+        Number(stream.duration);
+
+    if (
+        !Number.isFinite(duration) ||
+        duration <= 0
+    ) {
+        throw new Error(
+            `invalid video duration: ${stream.duration}`
+        );
+    }
+
+    return {
+        frameRate,
+        duration,
+    };
+}
+
+
+async function getVideoFrameRate(
+    inputPath,
+    recordedId = null
+) {
     const result =
         await spawnAndCapture(
             FFPROBE_COMMAND,
@@ -244,7 +473,9 @@ async function getVideoFrameRate(inputPath) {
                 '-of',
                 'default=noprint_wrappers=1:nokey=1',
                 inputPath,
-            ]
+            ],
+            {},
+            recordedId
         );
 
     const values =
@@ -446,7 +677,8 @@ function validateStationId(stationId) {
 
 async function prepareLogo(
     workInput,
-    channelName
+    channelName,
+    recordedId
 ) {
     const channel = parseChannel(workInput);
 
@@ -556,7 +788,9 @@ async function prepareLogo(
                     '--auto-roi',
                     '--name',
                     stationId,
-                ]
+                ],
+                {},
+                String(recordedId)
             );
 
         if (!isUsableFile(candidateLogoPath)) {
@@ -918,6 +1152,116 @@ function parseKeepRanges(filePath) {
     return ranges;
 }
 
+function buildCutRanges(
+    keepRanges,
+    cmRanges,
+    totalFrames,
+    videoFps
+) {
+    const ranges = [];
+
+    if (
+        !Array.isArray(keepRanges) ||
+        keepRanges.length === 0
+    ) {
+        return ranges;
+    }
+
+    const sortedKeepRanges =
+        [...keepRanges].sort(
+            (a, b) =>
+                a.startFrame - b.startFrame
+        );
+
+    const addRange =
+        (startFrame, endFrame, kind) => {
+            if (endFrame < startFrame) {
+                return;
+            }
+
+            ranges.push({
+                startFrame,
+                endFrame,
+                startTime:
+                    startFrame / videoFps,
+                endTime:
+                    (endFrame + 1) / videoFps,
+                kind,
+            });
+        };
+
+    const classifyInternalRange =
+        (startFrame, endFrame) => {
+            const overlapsCm =
+                cmRanges.some(range =>
+                    range.startFrame <= endFrame &&
+                    range.endFrame >= startFrame
+                );
+
+            return overlapsCm
+                ? 'cm'
+                : 'other';
+        };
+
+    const first =
+        sortedKeepRanges[0];
+
+    if (first.startFrame > 0) {
+        addRange(
+            0,
+            first.startFrame - 1,
+            'head'
+        );
+    }
+
+    for (
+        let i = 0;
+        i < sortedKeepRanges.length - 1;
+        i++
+    ) {
+        const current =
+            sortedKeepRanges[i];
+        const next =
+            sortedKeepRanges[i + 1];
+
+        const startFrame =
+            current.endFrame + 1;
+        const endFrame =
+            next.startFrame - 1;
+
+        if (endFrame >= startFrame) {
+            addRange(
+                startFrame,
+                endFrame,
+                classifyInternalRange(
+                    startFrame,
+                    endFrame
+                )
+            );
+        }
+    }
+
+    const last =
+        sortedKeepRanges[
+            sortedKeepRanges.length - 1
+        ];
+
+    if (
+        Number.isInteger(totalFrames) &&
+        totalFrames > 0 &&
+        last.endFrame < totalFrames - 1
+    ) {
+        addRange(
+            last.endFrame + 1,
+            totalFrames - 1,
+            'tail'
+        );
+    }
+
+    return ranges;
+}
+
+
 function buildAnalysis(outputRoot, metadata) {
     const chapterPath =
         path.join(
@@ -966,6 +1310,40 @@ function buildAnalysis(outputRoot, metadata) {
             metadata.videoFps
         );
 
+    const totalFrames =
+        Number.isFinite(metadata.videoDuration)
+            ? Math.round(
+                metadata.videoDuration *
+                metadata.videoFps
+            )
+            : null;
+
+    const cutRanges =
+        buildCutRanges(
+            keepRanges,
+            playbackCmRanges,
+            totalFrames,
+            metadata.videoFps
+        );
+
+    const firstKeepRange =
+        keepRanges[0];
+
+    const lastKeepRange =
+        keepRanges[
+            keepRanges.length - 1
+        ];
+
+    const playbackStart =
+        firstKeepRange.startFrame /
+        metadata.videoFps;
+
+    const playbackEnd =
+        (
+            lastKeepRange.endFrame + 1
+        ) /
+        metadata.videoFps;
+
     return {
         version: 2,
         recordedId:
@@ -1002,6 +1380,9 @@ function buildAnalysis(outputRoot, metadata) {
             cmRanges:
                 playbackCmRanges,
             keepRanges,
+            cutRanges,
+            playbackStart,
+            playbackEnd,
         },
         jlse: {
             segments,
@@ -1059,7 +1440,8 @@ async function runAnalysis(job) {
         const logo =
             await prepareLogo(
                 workInput,
-                job.channelName
+                job.channelName,
+                String(job.recordedId)
             );
 
         currentJob = {
@@ -1097,8 +1479,19 @@ async function runAnalysis(job) {
                     'inherit',
                     'inherit',
                 ],
-            }
+            },
+            String(job.recordedId)
         );
+
+        if (
+            canceledRecordedIds.has(
+                String(job.recordedId)
+            )
+        ) {
+            throw new Error(
+                `analysis canceled: recordedId=${job.recordedId}`
+            );
+        }
 
         log(
             'analysis finished',
@@ -1135,15 +1528,23 @@ async function runAnalysis(job) {
             outputRoot
         );
 
-        const videoFps =
-            await getVideoFrameRate(
-                workInput
+        const videoMetadata =
+            await getVideoMetadata(
+                workInput,
+                String(job.recordedId)
             );
 
+        const videoFps =
+            videoMetadata.frameRate;
+
+        const videoDuration =
+            videoMetadata.duration;
+
         log(
-            'video frame rate',
+            'video metadata',
             `recordedId=${job.recordedId}`,
-            `fps=${videoFps}`
+            `fps=${videoFps}`,
+            `duration=${videoDuration}`
         );
 
         const metadata = {
@@ -1166,6 +1567,7 @@ async function runAnalysis(job) {
             analyzedAt:
                 new Date().toISOString(),
             videoFps,
+            videoDuration,
         };
 
         const analysis =
@@ -1225,6 +1627,10 @@ async function runAnalysis(job) {
             err
         );
     } finally {
+        canceledRecordedIds.delete(
+            String(job.recordedId)
+        );
+        currentAnalysisChild = null;
         running = false;
         currentJob = null;
     }
@@ -1531,6 +1937,57 @@ async function loadAnalysisForPlayback(
                             ) / frameRate,
                     })
                 );
+        }
+
+        /*
+         * Backward compatibility for analyses created before
+         * playbackStart / playbackEnd were stored.
+         *
+         * keepRanges are exact inclusive Trim() ranges, so:
+         *   playbackStart = first kept frame
+         *   playbackEnd   = first frame after the last kept frame
+         *
+         * This does not modify analysis.json on disk.
+         */
+        if (
+            Array.isArray(
+                analysis.timeline.keepRanges
+            ) &&
+            analysis.timeline.keepRanges.length > 0
+        ) {
+            const firstKeepRange =
+                analysis.timeline.keepRanges[0];
+
+            const lastKeepRange =
+                analysis.timeline.keepRanges[
+                    analysis.timeline.keepRanges.length - 1
+                ];
+
+            if (
+                typeof analysis.timeline.playbackStart !== 'number' ||
+                !Number.isFinite(
+                    analysis.timeline.playbackStart
+                )
+            ) {
+                analysis.timeline.playbackStart =
+                    Number(
+                        firstKeepRange.startFrame
+                    ) / frameRate;
+            }
+
+            if (
+                typeof analysis.timeline.playbackEnd !== 'number' ||
+                !Number.isFinite(
+                    analysis.timeline.playbackEnd
+                )
+            ) {
+                analysis.timeline.playbackEnd =
+                    (
+                        Number(
+                            lastKeepRange.endFrame
+                        ) + 1
+                    ) / frameRate;
+            }
         }
     }
 
@@ -1871,6 +2328,99 @@ const server = http.createServer(
                     recPath: job.recPath,
                 })),
             });
+            return;
+        }
+
+        if (
+            req.method === 'POST' &&
+            req.url === '/cancel'
+        ) {
+            let body;
+
+            try {
+                body = await readJson(req);
+            } catch (err) {
+                sendJson(res, 400, {
+                    error: 'invalid json',
+                });
+                return;
+            }
+
+            if (
+                typeof body.recordedId ===
+                'undefined'
+            ) {
+                sendJson(res, 400, {
+                    error: 'recordedId is required',
+                });
+                return;
+            }
+
+            const recordedId =
+                String(body.recordedId);
+
+            let queued = false;
+            let active = false;
+
+            /*
+             * queued job は解析開始前に除去。
+             */
+            for (
+                let i = jobQueue.length - 1;
+                i >= 0;
+                i--
+            ) {
+                if (
+                    String(
+                        jobQueue[i].recordedId
+                    ) === recordedId
+                ) {
+                    jobQueue.splice(i, 1);
+                    queued = true;
+                }
+            }
+
+            /*
+             * 実行中なら canceled を記録して、
+             * JLSE プロセスグループを停止する。
+             *
+             * prepareLogo 中など child 起動前でも
+             * canceledRecordedIds を残すため、
+             * JLSE 起動時点で即停止される。
+             */
+            if (
+                currentJob !== null &&
+                String(
+                    currentJob.recordedId
+                ) === recordedId
+            ) {
+                active = true;
+                canceledRecordedIds.add(
+                    recordedId
+                );
+
+                terminateAnalysisChild(
+                    currentAnalysisChild
+                );
+            }
+
+            log(
+                'analysis cancel requested',
+                `recordedId=${recordedId}`,
+                `queued=${queued}`,
+                `active=${active}`
+            );
+
+            sendJson(res, 200, {
+                status:
+                    queued || active
+                        ? 'canceling'
+                        : 'not-found',
+                recordedId,
+                queued,
+                running: active,
+            });
+
             return;
         }
 

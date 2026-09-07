@@ -8,12 +8,22 @@
         <v-btn icon v-on:click="onSelectAll">
             <v-icon>mdi-select-all</v-icon>
         </v-btn>
-        <v-btn v-if="isShowEncode === true" icon :disabled="isEncodeDisabled === true" v-on:click="onEncode">
-            <v-icon>mdi-video-plus</v-icon>
-        </v-btn>
-        <v-btn v-if="isShowJikkyo === true" icon :disabled="isJikkyoDisabled === true" v-on:click="onJikkyo">
-            <v-icon>mdi-comment-text-outline</v-icon>
-        </v-btn>
+        <v-tooltip v-if="isShowEncode === true" bottom>
+            <template v-slot:activator="{ on }">
+                <v-btn icon :disabled="isEncodeDisabled === true" v-on="on" v-on:click="onEncode">
+                    <v-icon>mdi-video-plus</v-icon>
+                </v-btn>
+            </template>
+            <span>一括エンコード</span>
+        </v-tooltip>
+        <v-tooltip v-if="isShowJikkyo === true" bottom>
+            <template v-slot:activator="{ on }">
+                <v-btn icon :disabled="isJikkyoDisabled === true" v-on="on" v-on:click="onJikkyo">
+                    <v-icon>mdi-comment-text-outline</v-icon>
+                </v-btn>
+            </template>
+            <span>実況XML生成</span>
+        </v-tooltip>
         <v-tooltip v-if="isShowRepair === true" bottom>
             <template v-slot:activator="{ on }">
                 <v-btn icon :disabled="isRepairDisabled === true" v-on="on" v-on:click="onRepair">

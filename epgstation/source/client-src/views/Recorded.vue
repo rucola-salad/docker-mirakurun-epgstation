@@ -33,15 +33,28 @@
                     {{ maintenanceActionLabel }}
                     <span v-if="bulkMaintenanceJob.state === 'running'">実行中</span>
                     <span v-else-if="bulkMaintenanceJob.state === 'completed'">完了</span>
+                    <span v-else-if="bulkMaintenanceJob.state === 'canceled'">キャンセル済み</span>
                     <span v-else>失敗</span>
                 </div>
                 <v-spacer></v-spacer>
+                <v-btn
+                    v-if="bulkMaintenanceJob.state === 'running'"
+                    x-small
+                    text
+                    class="mr-2"
+                    :loading="isCancelingBulkMaintenance"
+                    :disabled="isCancelingBulkMaintenance"
+                    v-on:click="cancelBulkMaintenance"
+                >
+                    <v-icon x-small class="mr-1">mdi-cancel</v-icon>
+                    キャンセル
+                </v-btn>
                 <div class="caption">{{ bulkMaintenanceJob.completed }} / {{ bulkMaintenanceJob.total }}件</div>
             </div>
             <v-progress-linear class="mt-2" :value="maintenanceProgress" :indeterminate="bulkMaintenanceJob.total === 0"></v-progress-linear>
             <div v-if="bulkMaintenanceJob.currentTitle !== null" class="body-2 mt-2">
                 現在: {{ bulkMaintenanceJob.currentTitle }}
-                <span v-if="bulkMaintenanceJob.currentState !== null"> / {{ maintenanceStateLabel(bulkMaintenanceJob.currentState) }}</span>
+                <span v-if="bulkMaintenanceJob.currentState !== null">/ {{ maintenanceStateLabel(bulkMaintenanceJob.currentState) }}</span>
             </div>
             <div v-if="bulkMaintenanceJob.failed > 0" class="caption error--text mt-1">失敗: {{ bulkMaintenanceJob.failed }}件</div>
             <div class="maintenance-items mt-2">
@@ -49,6 +62,29 @@
                     <v-icon x-small class="mr-1">{{ maintenanceStateIcon(item.state) }}</v-icon>
                     {{ item.title }}: {{ maintenanceStateLabel(item.state) }}
                 </div>
+            </div>
+        </v-card>
+
+        <v-card v-if="maintenanceStatuses.length > 0" class="ma-2 pa-3 maintenance-status" outlined>
+            <div class="subtitle-2 font-weight-bold">処理状態</div>
+            <div v-for="status in maintenanceStatuses" :key="`${status.recordedId}-${status.action}`" class="caption d-flex align-center mt-1">
+                <div class="text-truncate">
+                    <v-icon x-small class="mr-1">{{ maintenanceStateIcon(status.state) }}</v-icon>
+                    #{{ status.recordedId }} {{ status.action === 'repair' ? '録画修復' : 'チャプター再作成' }}:
+                    {{ maintenanceStateLabel(status.state) }}
+                </div>
+                <v-btn
+                    v-if="canCancelMaintenance(status)"
+                    x-small
+                    text
+                    class="ml-2"
+                    :loading="isCancelingMaintenance(status)"
+                    :disabled="isCancelingMaintenance(status)"
+                    v-on:click="cancelMaintenance(status)"
+                >
+                    <v-icon x-small>mdi-cancel</v-icon>
+                    キャンセル
+                </v-btn>
             </div>
         </v-card>
 
@@ -106,6 +142,7 @@ import IRecordedApiModel, {
     RecordedMaintenanceBulkAction,
     RecordedMaintenanceBulkItemState,
     RecordedMaintenanceBulkJob,
+    RecordedMaintenanceStatus,
 } from '@/model/api/recorded/IRecordedApiModel';
 import container from '@/model/ModelContainer';
 import ISocketIOModel from '@/model/socketio/ISocketIOModel';
@@ -141,9 +178,13 @@ export default class Recorded extends Vue {
     public isOpenMultipleJikkyoDialog: boolean = false;
     public isOpenCleanupDialog: boolean = false;
     public bulkMaintenanceJob: RecordedMaintenanceBulkJob | null = null;
+    public maintenanceStatuses: RecordedMaintenanceStatus[] = [];
+    public cancelingMaintenanceKeys: string[] = [];
+    public isCancelingBulkMaintenance: boolean = false;
 
     private isVisibilityHidden: boolean = false;
     private maintenancePollTimer: number | null = null;
+    private isMaintenanceStatusInitialized: boolean = false;
     private recordedState: IRecordedState = container.get<IRecordedState>('IRecordedState');
     private recordedApiModel: IRecordedApiModel = container.get<IRecordedApiModel>('IRecordedApiModel');
     private setting: ISettingStorageModel = container.get<ISettingStorageModel>('ISettingStorageModel');
@@ -165,6 +206,10 @@ export default class Recorded extends Vue {
 
     get isBulkMaintenanceRunning(): boolean {
         return this.bulkMaintenanceJob !== null && this.bulkMaintenanceJob.state === 'running';
+    }
+
+    get activeMaintenanceStatuses(): RecordedMaintenanceStatus[] {
+        return this.maintenanceStatuses.filter(status => status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled');
     }
 
     get maintenanceActionLabel(): string {
@@ -249,9 +294,7 @@ export default class Recorded extends Vue {
         this.recordedState.clearSelect();
         this.snackbarState.open({
             color: result.failed === 0 ? 'success' : 'error',
-            text: result.failed === 0
-                ? `${result.success} 件のエンコードを追加しました。`
-                : `${result.success} 件追加、${result.failed} 件失敗しました。`,
+            text: result.failed === 0 ? `${result.success} 件のエンコードを追加しました。` : `${result.success} 件追加、${result.failed} 件失敗しました。`,
         });
     }
 
@@ -300,21 +343,94 @@ export default class Recorded extends Vue {
 
     public maintenanceStateLabel(state: RecordedMaintenanceBulkItemState): string {
         switch (state) {
-            case 'queued': return '待機中';
-            case 'checking': return 'TS検査中';
-            case 'repairing': return 'TS修復中';
-            case 'rebuilding-chapters': return 'チャプター再作成中';
-            case 'completed': return '完了';
-            case 'failed': return '失敗';
+            case 'queued':
+                return '待機中';
+            case 'checking':
+                return 'TS検査中';
+            case 'repairing':
+                return 'TS修復中';
+            case 'rebuilding-chapters':
+                return 'チャプター再作成中';
+            case 'completed':
+                return '完了';
+            case 'failed':
+                return '失敗';
+            case 'canceled':
+                return 'キャンセル済み';
         }
     }
 
     public maintenanceStateIcon(state: RecordedMaintenanceBulkItemState): string {
         switch (state) {
-            case 'completed': return 'mdi-check-circle';
-            case 'failed': return 'mdi-alert-circle';
-            case 'queued': return 'mdi-clock-outline';
-            default: return 'mdi-progress-clock';
+            case 'completed':
+                return 'mdi-check-circle';
+            case 'failed':
+                return 'mdi-alert-circle';
+            case 'canceled':
+                return 'mdi-cancel';
+            case 'queued':
+                return 'mdi-clock-outline';
+            default:
+                return 'mdi-progress-clock';
+        }
+    }
+
+    public canCancelMaintenance(status: RecordedMaintenanceStatus): boolean {
+        return status.origin === 'manual' && status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled';
+    }
+
+    public isCancelingMaintenance(status: RecordedMaintenanceStatus): boolean {
+        return this.cancelingMaintenanceKeys.indexOf(`${status.recordedId}:${status.action}`) !== -1;
+    }
+
+    public async cancelMaintenance(status: RecordedMaintenanceStatus): Promise<void> {
+        if (!this.canCancelMaintenance(status) || this.isCancelingMaintenance(status)) {
+            return;
+        }
+
+        const key = `${status.recordedId}:${status.action}`;
+        this.cancelingMaintenanceKeys.push(key);
+
+        try {
+            await this.recordedApiModel.cancelMaintenance(status.recordedId, status.action);
+            await this.fetchMaintenanceStatus();
+            this.snackbarState.open({
+                color: 'success',
+                text: 'キャンセルを要求しました',
+            });
+        } catch (err) {
+            console.error(err);
+            this.snackbarState.open({
+                color: 'error',
+                text: 'キャンセルに失敗しました',
+            });
+        } finally {
+            this.cancelingMaintenanceKeys = this.cancelingMaintenanceKeys.filter(item => item !== key);
+        }
+    }
+
+    public async cancelBulkMaintenance(): Promise<void> {
+        if (!this.isBulkMaintenanceRunning || this.isCancelingBulkMaintenance) {
+            return;
+        }
+
+        this.isCancelingBulkMaintenance = true;
+
+        try {
+            this.bulkMaintenanceJob = await this.recordedApiModel.cancelBulkMaintenanceJob();
+            await this.fetchMaintenanceStatus();
+            this.snackbarState.open({
+                color: 'success',
+                text: '一括処理のキャンセルを要求しました',
+            });
+        } catch (err) {
+            console.error(err);
+            this.snackbarState.open({
+                color: 'error',
+                text: '一括処理をキャンセルできませんでした',
+            });
+        } finally {
+            this.isCancelingBulkMaintenance = false;
         }
     }
 
@@ -355,16 +471,39 @@ export default class Recorded extends Vue {
     }
 
     private async fetchMaintenanceStatus(): Promise<void> {
-        this.bulkMaintenanceJob = await this.recordedApiModel.getBulkMaintenanceJob();
+        const info = await this.recordedApiModel.getMaintenanceInfo();
+
+        if (this.isMaintenanceStatusInitialized === false) {
+            this.bulkMaintenanceJob = info.job !== null && info.job.state === 'running' ? info.job : null;
+
+            this.maintenanceStatuses = info.statuses.filter(status => status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled');
+
+            this.isMaintenanceStatusInitialized = true;
+        } else {
+            const visibleKeys = new Set(this.maintenanceStatuses.map(status => `${status.recordedId}:${status.action}`));
+
+            this.maintenanceStatuses = info.statuses.filter(status => {
+                const key = `${status.recordedId}:${status.action}`;
+
+                return (status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled') || visibleKeys.has(key);
+            });
+
+            if (info.job !== null) {
+                if (info.job.state === 'running' || this.bulkMaintenanceJob === null || this.bulkMaintenanceJob.id === info.job.id) {
+                    this.bulkMaintenanceJob = info.job;
+                }
+            }
+        }
+
         this.updateMaintenancePolling();
     }
 
     private updateMaintenancePolling(): void {
-        if (this.isBulkMaintenanceRunning && this.maintenancePollTimer === null) {
+        if ((this.isBulkMaintenanceRunning || this.activeMaintenanceStatuses.length > 0) && this.maintenancePollTimer === null) {
             this.maintenancePollTimer = window.setInterval(() => {
                 this.fetchMaintenanceStatus().catch(err => console.error(err));
             }, 2000);
-        } else if (!this.isBulkMaintenanceRunning) {
+        } else if (!this.isBulkMaintenanceRunning && this.activeMaintenanceStatuses.length === 0) {
             this.stopMaintenancePolling();
         }
     }

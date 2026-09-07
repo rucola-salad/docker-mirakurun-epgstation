@@ -34,6 +34,7 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
     public async check(
         recorded: Recorded,
         sourceVideoFileId: apid.VideoFileId,
+        signal?: AbortSignal,
     ): Promise<boolean | null> {
         const sourceVideoFile =
             typeof recorded.videoFiles === 'undefined'
@@ -85,8 +86,40 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
                     ],
                     {
                         stdio: ['ignore', 'ignore', 'pipe'],
+                        detached: typeof signal !== 'undefined',
                     },
                 );
+
+                const abortHandler = (): void => {
+                    if (
+                        child.exitCode !== null ||
+                        child.signalCode !== null
+                    ) {
+                        return;
+                    }
+
+                    if (
+                        typeof signal !== 'undefined' &&
+                        typeof child.pid !== 'undefined'
+                    ) {
+                        try {
+                            process.kill(-child.pid, 'SIGTERM');
+                            return;
+                        } catch (_) {
+                            // process group kill failed; fall back below
+                        }
+                    }
+
+                    child.kill('SIGTERM');
+                };
+
+                if (typeof signal !== 'undefined') {
+                    if (signal.aborted) {
+                        abortHandler();
+                    } else {
+                        signal.addEventListener('abort', abortHandler, { once: true });
+                    }
+                }
 
                 let stderr = '';
                 if (child.stderr !== null) {
@@ -99,6 +132,15 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
 
                 child.once('error', reject);
                 child.once('close', code => {
+                    if (typeof signal !== 'undefined') {
+                        signal.removeEventListener('abort', abortHandler);
+                    }
+
+                    if (signal?.aborted) {
+                        reject(new Error('TS health check canceled'));
+                        return;
+                    }
+
                     if (code === 0) {
                         resolve(true);
                         return;
@@ -119,6 +161,10 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
             );
             return healthy;
         } catch (err) {
+            if (signal?.aborted) {
+                throw err;
+            }
+
             this.log.system.error(`TS health check failed: recorded=${recorded.id}`);
             this.log.system.error(err);
             return null;
@@ -128,6 +174,7 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
     public async repair(
         recorded: Recorded,
         sourceVideoFileId: apid.VideoFileId,
+        signal?: AbortSignal,
     ): Promise<apid.VideoFileId | null> {
         const sourceVideoFile =
             typeof recorded.videoFiles === 'undefined'
@@ -204,12 +251,53 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
                     [inputPath, outputPath, workDir],
                     {
                         stdio: 'inherit',
+                        detached: typeof signal !== 'undefined',
                     },
                 );
 
+                const abortHandler = (): void => {
+                    if (
+                        child.exitCode !== null ||
+                        child.signalCode !== null
+                    ) {
+                        return;
+                    }
+
+                    if (
+                        typeof signal !== 'undefined' &&
+                        typeof child.pid !== 'undefined'
+                    ) {
+                        try {
+                            process.kill(-child.pid, 'SIGTERM');
+                            return;
+                        } catch (_) {
+                            // process group kill failed; fall back below
+                        }
+                    }
+
+                    child.kill('SIGTERM');
+                };
+
+                if (typeof signal !== 'undefined') {
+                    if (signal.aborted) {
+                        abortHandler();
+                    } else {
+                        signal.addEventListener('abort', abortHandler, { once: true });
+                    }
+                }
+
                 child.once('error', reject);
 
-                child.once('close', (code, signal) => {
+                child.once('close', (code, exitSignal) => {
+                    if (typeof signal !== 'undefined') {
+                        signal.removeEventListener('abort', abortHandler);
+                    }
+
+                    if (signal?.aborted) {
+                        reject(new Error('TS repair canceled'));
+                        return;
+                    }
+
                     if (code === 0) {
                         resolve();
                         return;
@@ -217,15 +305,23 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
 
                     reject(
                         new Error(
-                            `TS repair process exited abnormally: code=${code} signal=${signal}`,
+                            `TS repair process exited abnormally: code=${code} signal=${exitSignal}`,
                         ),
                     );
                 });
             });
         } catch (err) {
+            if (signal?.aborted) {
+                throw err;
+            }
+
             this.log.system.error(`TS repair failed: recorded=${recorded.id}`);
             this.log.system.error(err);
             return null;
+        }
+
+        if (signal?.aborted) {
+            throw new Error('TS repair canceled');
         }
 
         try {
@@ -238,6 +334,10 @@ export default class TsRepairManageModel implements ITsRepairManageModel {
             this.log.system.error(`TS repair output is not accessible: ${outputPath}`);
             this.log.system.error(err);
             return null;
+        }
+
+        if (signal?.aborted) {
+            throw new Error('TS repair canceled');
         }
 
         try {

@@ -4,6 +4,10 @@ import {
     repairRecorded,
 } from '../../../RecordedMaintenance';
 import * as api from '../../../api';
+import {
+    addManualRecordedMaintenance,
+    setRecordedMaintenanceStatus,
+} from '../../../RecordedMaintenanceQueue';
 
 export const post: Operation = async (req, res) => {
     const recordedId = parseInt(req.params.recordedId, 10);
@@ -14,7 +18,24 @@ export const post: Operation = async (req, res) => {
     }
 
     try {
-        const result = await repairRecorded(recordedId);
+        const result = await addManualRecordedMaintenance(
+            recordedId,
+            'repair',
+            'manual',
+            context =>
+                repairRecorded(
+                    recordedId,
+                    stage => {
+                        setRecordedMaintenanceStatus(
+                            recordedId,
+                            'repair',
+                            'manual',
+                            stage,
+                        );
+                    },
+                    context.signal,
+                ),
+        );
         api.responseJSON(res, 200, result);
     } catch (err: any) {
         if (err instanceof RecordedMaintenanceError) {

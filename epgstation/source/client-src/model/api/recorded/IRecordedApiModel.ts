@@ -9,19 +9,11 @@ export interface ManualTsRepairResult {
 
 export interface RebuildChaptersResult {
     status: 'accepted';
-    sourceVideoFileId: apid.VideoFileId;
-    sourceType: apid.VideoFileType;
-    sourceName: string;
+    recordedId: apid.RecordedId;
 }
 
 export type RecordedMaintenanceBulkAction = 'repair' | 'chapters';
-export type RecordedMaintenanceBulkItemState =
-    | 'queued'
-    | 'checking'
-    | 'repairing'
-    | 'rebuilding-chapters'
-    | 'completed'
-    | 'failed';
+export type RecordedMaintenanceBulkItemState = 'queued' | 'checking' | 'repairing' | 'rebuilding-chapters' | 'completed' | 'failed' | 'canceled';
 
 export interface RecordedMaintenanceBulkItem {
     recordedId: apid.RecordedId;
@@ -33,7 +25,7 @@ export interface RecordedMaintenanceBulkItem {
 export interface RecordedMaintenanceBulkJob {
     id: string;
     action: RecordedMaintenanceBulkAction;
-    state: 'running' | 'completed' | 'failed';
+    state: 'running' | 'completed' | 'failed' | 'canceled';
     total: number;
     completed: number;
     failed: number;
@@ -41,6 +33,22 @@ export interface RecordedMaintenanceBulkJob {
     currentTitle: string | null;
     currentState: RecordedMaintenanceBulkItemState | null;
     items: RecordedMaintenanceBulkItem[];
+}
+
+export type RecordedMaintenanceOrigin = 'automatic' | 'manual' | 'bulk';
+
+export interface RecordedMaintenanceStatus {
+    recordedId: apid.RecordedId;
+    action: RecordedMaintenanceBulkAction;
+    origin: RecordedMaintenanceOrigin;
+    state: RecordedMaintenanceBulkItemState;
+    message?: string;
+    updatedAt: number;
+}
+
+export interface RecordedMaintenanceInfo {
+    job: RecordedMaintenanceBulkJob | null;
+    statuses: RecordedMaintenanceStatus[];
 }
 
 export default interface IRecordedApiModel {
@@ -56,6 +64,8 @@ export default interface IRecordedApiModel {
     generateJikkyo(recordedId: apid.RecordedId): Promise<apid.GenerateJikkyoResult>;
     repair(recordedId: apid.RecordedId): Promise<ManualTsRepairResult>;
     rebuildChapters(recordedId: apid.RecordedId): Promise<RebuildChaptersResult>;
-    getBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null>;
+    getMaintenanceInfo(): Promise<RecordedMaintenanceInfo>;
     startBulkMaintenanceJob(action: RecordedMaintenanceBulkAction, recordedIds: apid.RecordedId[]): Promise<RecordedMaintenanceBulkJob>;
+    cancelMaintenance(recordedId: apid.RecordedId, action: RecordedMaintenanceBulkAction): Promise<void>;
+    cancelBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null>;
 }

@@ -1,0 +1,53 @@
+services:
+    epgstation-test:
+        container_name: epgstation-custom-test
+        image: ${EPGSTATION_TEST_IMAGE:-epgstation-v2:main-integration-maintenance-status-20260907}
+
+        volumes:
+            - /etc/localtime:/etc/localtime:ro
+            - ./epgstation/test-env/config:/app/config
+            - ./epgstation/test-env/data:/app/data
+            - ./epgstation/test-env/thumbnail:/app/thumbnail
+            - ./epgstation/test-env/logs:/app/logs
+            - ./epgstation/test-env/recorded:/app/recorded
+            - /mnt/hdd1/ts-repair-work/epgstation-runtime:/app/ts-repair-work
+
+        devices:
+            - /dev/dri:/dev/dri
+
+        environment:
+            TZ: "Asia/Tokyo"
+            TS_REPAIR_WORK_ROOT: "/app/ts-repair-work"
+            TS_REPAIR_PATH: "/opt/ffmpeg-7.0.2/bin/ts-repair"
+            CM_ANALYZER_URL: "http://cm-analyzer-test:8080"
+
+        ports:
+            - "18888:8888"
+            - "18889:8889"
+
+        restart: always
+
+        networks:
+            - epgstation-network
+
+
+    cm-analyzer-test:
+        container_name: cm-analyzer-test
+        image: cm-analyzer-test:maintenance-cancel-20260907
+
+        volumes:
+            - /etc/localtime:/etc/localtime:ro
+            - ./epgstation/test-env/recorded:/recorded
+            - ./epgstation/cm-analyzer-data-test:/data
+            - ./epgstation/cm-analyzer-data-test/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
+            - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
+
+        restart: always
+
+        networks:
+            - epgstation-network
+
+networks:
+    epgstation-network:
+        external: true
+        name: docker-mirakurun-epgstation_default

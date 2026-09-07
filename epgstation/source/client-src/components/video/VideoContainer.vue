@@ -52,18 +52,39 @@
                         </div>
                         <div class="video-control">
                             <div class="content" v-on:click="stopPropagation">
-                                <v-slider
-                                    v-if="isLive === false"
-                                    class="slider"
-                                    v-model="currentTime"
-                                    :max="duration"
-                                    color="white"
-                                    track-color="grey"
-                                    :disabled="duration === 0"
-                                    v-on:start="startChangeCurrentPosition"
-                                    v-on:change="endChangeCurrentPosition"
-                                    v-on:input="updateCurrentPosition"
-                                ></v-slider>
+                                <div v-if="isLive === false" class="seekbar-wrap">
+                                    <v-slider
+                                        class="slider"
+                                        v-model="currentTime"
+                                        :max="duration"
+                                        color="white"
+                                        track-color="grey"
+                                        :disabled="duration === 0"
+                                        v-on:start="startChangeCurrentPosition"
+                                        v-on:change="endChangeCurrentPosition"
+                                        v-on:input="updateCurrentPosition"
+                                    ></v-slider>
+                                    <div v-if="duration > 0 && (hasCmAnalysis || hasCmRanges || seekbarPlaybackBoundaryRanges.length > 0)" class="seekbar-analysis" aria-hidden="true">
+                                        <span
+                                            v-for="range in seekbarPlaybackBoundaryRanges"
+                                            :key="'boundary-' + range.key"
+                                            class="seekbar-playback-boundary-range"
+                                            :style="{ left: range.left + '%', width: range.width + '%' }"
+                                        ></span>
+                                        <span
+                                            v-for="range in seekbarCmRanges"
+                                            :key="'cm-' + range.key"
+                                            class="seekbar-cm-range"
+                                            :style="{ left: range.left + '%', width: range.width + '%' }"
+                                        ></span>
+                                        <span
+                                            v-for="marker in seekbarChapterMarkers"
+                                            :key="'chapter-' + marker.key"
+                                            class="seekbar-chapter-marker"
+                                            :style="{ left: marker.left + '%' }"
+                                        ></span>
+                                    </div>
+                                </div>
                                 <div class="d-flex align-center overflow-hidden mx-2">
                                     <v-btn v-if="isLive === true" class="play" icon dark aria-label="ライブを再読込" v-on:click="reloadLiveVideo">
                                         <v-icon>mdi-refresh</v-icon>
@@ -107,6 +128,8 @@
                                         class="cm-skip-icon"
                                         v-bind:class="{ disabled: isCmSkipEnabled === false }"
                                         aria-label="CM自動スキップ"
+                                        :aria-pressed="isCmSkipEnabled ? 'true' : 'false'"
+                                        :title="isCmSkipEnabled ? 'CM自動スキップ: ON' : 'CM自動スキップ: OFF'"
                                         v-on:click="switchCmSkip"
                                     >
                                         <v-icon>mdi-fast-forward-outline</v-icon>
@@ -330,6 +353,7 @@ export default class VideoContainer extends Vue {
 
     private lastPlaybackPositionSavedAt: number = 0;
     private isPlaybackPositionRestored: boolean = false;
+    private pendingInitialPlaybackPosition: number | null = null;
 
     // 字幕状態 (表示用)
     public isEnabledSubtitles: boolean = false;
@@ -378,9 +402,11 @@ export default class VideoContainer extends Vue {
 
     @Watch('$route', { immediate: true, deep: true })
     public onUrlChange(): void {
+
         this.removeLivePlaybackRetryListener();
         this.isFirstPlay = true;
         this.isPlaybackPositionRestored = false;
+        this.pendingInitialPlaybackPosition = null;
         this.lastPlaybackPositionSavedAt = 0;
         this.cmAnalysis = null;
         this.lastAutoSkippedCmRangeIndex = null;
@@ -405,6 +431,109 @@ export default class VideoContainer extends Vue {
         return this.getPlayableCmRanges().length > 0;
     }
 
+    public get seekbarPlaybackBoundaryRanges(): Array<{ key: string; left: number; width: number }> {
+        if (
+            this.duration <= 0 ||
+            this.cmAnalysis === null
+        ) {
+            return [];
+        }
+
+        const ranges: Array<{
+            key: string;
+            left: number;
+            width: number;
+        }> = [];
+
+        const playbackStart =
+            this.cmAnalysis.timeline.playbackStart;
+
+        if (
+            typeof playbackStart === 'number' &&
+            isFinite(playbackStart) &&
+            playbackStart > 0
+        ) {
+            const endTime =
+                Math.min(
+                    playbackStart,
+                    this.duration
+                );
+
+            if (endTime > 0) {
+                ranges.push({
+                    key: `head-0-${endTime}`,
+                    left: 0,
+                    width:
+                        (endTime / this.duration) *
+                        100,
+                });
+            }
+        }
+
+        const playbackEnd =
+            this.cmAnalysis.timeline.playbackEnd;
+
+        if (
+            typeof playbackEnd === 'number' &&
+            isFinite(playbackEnd) &&
+            playbackEnd >= 0 &&
+            playbackEnd < this.duration
+        ) {
+            const startTime =
+                Math.max(
+                    0,
+                    playbackEnd
+                );
+
+            ranges.push({
+                key:
+                    `tail-${startTime}-${this.duration}`,
+                left:
+                    (startTime / this.duration) *
+                    100,
+                width:
+                    (
+                        (this.duration - startTime) /
+                        this.duration
+                    ) * 100,
+            });
+        }
+
+        return ranges;
+    }
+
+    public get seekbarCmRanges(): Array<{ key: string; left: number; width: number }> {
+        if (this.duration <= 0) {
+            return [];
+        }
+
+        return this.getPlayableCmRanges()
+            .map((range, index) => {
+                const startTime = Math.max(0, Math.min(range.startTime as number, this.duration));
+                const endTime = Math.max(startTime, Math.min(range.endTime as number, this.duration));
+
+                return {
+                    key: `${index}-${startTime}-${endTime}`,
+                    left: (startTime / this.duration) * 100,
+                    width: ((endTime - startTime) / this.duration) * 100,
+                };
+            })
+            .filter(range => range.width > 0);
+    }
+
+    public get seekbarChapterMarkers(): Array<{ key: string; left: number }> {
+        if (this.duration <= 0 || this.cmAnalysis === null || !Array.isArray(this.cmAnalysis.timeline.chapters)) {
+            return [];
+        }
+
+        return this.cmAnalysis.timeline.chapters
+            .filter(chapter => typeof chapter.time === 'number' && isFinite(chapter.time) && chapter.time > 0 && chapter.time < this.duration)
+            .map((chapter, index) => ({
+                key: `${index}-${chapter.time}`,
+                left: (chapter.time / this.duration) * 100,
+            }));
+    }
+
     public get cmStatusText(): string {
         const ranges = this.getPlayableCmRanges();
 
@@ -425,6 +554,7 @@ export default class VideoContainer extends Vue {
 
     private async loadCmAnalysis(): Promise<void> {
         const serial = ++this.cmAnalysisLoadSerial;
+
 
         this.cmAnalysis = null;
         this.lastAutoSkippedCmRangeIndex = null;
@@ -459,6 +589,8 @@ export default class VideoContainer extends Vue {
             }
 
             this.cmAnalysis = analysis;
+            this.restorePlaybackPosition();
+
         } catch (err) {
             if (serial !== this.cmAnalysisLoadSerial) {
                 return;
@@ -535,10 +667,33 @@ export default class VideoContainer extends Vue {
             return;
         }
 
-        const target = this.cmAnalysis.timeline.chapters.find(chapter => chapter.time > this.currentTime + 0.5);
+        const chapters = this.cmAnalysis.timeline.chapters;
 
-        if (target) {
-            this.seekPlaybackTime(target.time);
+        /*
+         * 現在位置がチャプター境界の直前として報告される場合でも、
+         * その境界を「現在いるチャプター」とみなして次へ送る。
+         */
+        const boundaryTolerance = 1.0;
+
+        let currentChapterIndex = -1;
+
+        for (let i = 0; i < chapters.length; i++) {
+            if (chapters[i].time <= this.currentTime + boundaryTolerance) {
+                currentChapterIndex = i;
+            } else {
+                break;
+            }
+        }
+
+        const nextChapterIndex = currentChapterIndex + 1;
+
+        if (
+            nextChapterIndex >= 0 &&
+            nextChapterIndex < chapters.length
+        ) {
+            this.seekPlaybackTime(
+                chapters[nextChapterIndex].time
+            );
         }
     }
 
@@ -550,6 +705,41 @@ export default class VideoContainer extends Vue {
         if (this.isCmSkipEnabled) {
             this.maybeAutoSkipCm();
         }
+    }
+
+    private maybeStopAtPlaybackEnd(): boolean {
+        if (
+            this.cmAnalysis === null ||
+            typeof this.cmAnalysis.timeline.playbackEnd !== 'number' ||
+            !isFinite(this.cmAnalysis.timeline.playbackEnd) ||
+            this.isChangingCurrentPosition === true ||
+            typeof this.$refs.video === 'undefined'
+        ) {
+            return false;
+        }
+
+        const playbackEnd =
+            this.cmAnalysis.timeline.playbackEnd;
+
+        if (
+            this.currentTime < playbackEnd ||
+            (this.$refs.video as BaseVideo).paused() === true
+        ) {
+            return false;
+        }
+
+        /*
+         * tail は自動スキップせず、番組としての再生終了位置で停止する。
+         * 手動シーク自体は playbackEnd より後も許可する。
+         */
+        (this.$refs.video as BaseVideo).pause();
+        (this.$refs.video as BaseVideo).setCurrentTime(playbackEnd);
+        this.currentTime = playbackEnd;
+        this.syncRecordedJikkyoSeek(playbackEnd);
+        this.updateTimeStr();
+        this.clearPlaybackPosition();
+
+        return true;
     }
 
     private maybeAutoSkipCm(): void {
@@ -731,6 +921,11 @@ export default class VideoContainer extends Vue {
         this.currentTime = this.getVideoCurrentTime();
         this.updateTimeStr();
         this.updateSubtitleState();
+
+        if (this.maybeStopAtPlaybackEnd()) {
+            return;
+        }
+
         this.maybeAutoSkipCm();
         this.savePlaybackPosition();
     }
@@ -801,15 +996,75 @@ export default class VideoContainer extends Vue {
 
     // 読み込み完了
     public onLoadeddata(): void {
+
         this.isLoading = false;
         this.forceUpdateSubtitle();
         this.updateSubtitleState();
         this.restorePlaybackPosition();
+
+    }
+
+    /**
+     * HLS 初期化で currentTime が 0 に戻る場合があるため、
+     * 初期復元位置を canplay 後に一度だけ保証する。
+     */
+    private async applyPendingInitialPlaybackPosition(): Promise<void> {
+        if (
+            this.pendingInitialPlaybackPosition === null ||
+            typeof this.$refs.video === 'undefined'
+        ) {
+            return;
+        }
+
+        const target =
+            this.pendingInitialPlaybackPosition;
+
+        const current =
+            this.getVideoCurrentTime();
+
+
+        /*
+         * HLS では初期シークによってストリームが再生成される場合がある。
+         * その場合は次の canplay まで pending を保持する。
+         */
+        if (
+            !isFinite(current) ||
+            Math.abs(current - target) > 0.25
+        ) {
+            (this.$refs.video as BaseVideo).setCurrentTime(target);
+            this.currentTime = target;
+            this.syncRecordedJikkyoSeek(target);
+            this.updateLastSeekTime();
+            this.updateTimeStr();
+            return;
+        }
+
+        /*
+         * 目標位置で canplay まで到達した時点で初期復元完了。
+         * HLS 再生成で失われた初回自動再生もここで復旧する。
+         */
+        this.pendingInitialPlaybackPosition = null;
+
+        if ((this.$refs.video as BaseVideo).paused() === true) {
+            try {
+                await (this.$refs.video as BaseVideo).play();
+            } catch (err) {
+                if (
+                    !(err instanceof DOMException) ||
+                    err.name !== 'NotAllowedError'
+                ) {
+                    console.error(err);
+                }
+            }
+        }
     }
 
     // 再生可能
     public async onCanplay(): Promise<void> {
+
         this.isLoading = false;
+
+        await this.applyPendingInitialPlaybackPosition();
 
         // ライブ視聴では再生可能になった時点で再生を開始する
         if (typeof this.jikkyoChannelId !== 'undefined' && typeof this.$refs.video !== 'undefined' && (this.$refs.video as BaseVideo).paused() === true) {
@@ -1178,34 +1433,79 @@ export default class VideoContainer extends Vue {
     }
 
     private restorePlaybackPosition(): void {
-        if (this.isPlaybackPositionRestored === true || typeof this.$refs.video === 'undefined') {
+        if (
+            this.isPlaybackPositionRestored === true ||
+            typeof this.$refs.video === 'undefined'
+        ) {
             return;
         }
 
-        const key = this.getPlaybackPositionKey();
+        const key =
+            this.getPlaybackPositionKey();
+
         if (key === null) {
+            return;
+        }
+
+        const saved =
+            localStorage.getItem(key);
+
+        if (saved !== null) {
+            const time =
+                Number(saved);
+
+            const duration =
+                this.getVideoDuration();
+
+            if (
+                isFinite(time) &&
+                time >= 5 &&
+                isFinite(duration) &&
+                duration > 0 &&
+                duration - time > 30
+            ) {
+                this.isPlaybackPositionRestored = true;
+                this.pendingInitialPlaybackPosition = time;
+
+                (this.$refs.video as BaseVideo).setCurrentTime(time);
+                this.currentTime = time;
+                this.updateTimeStr();
+                this.syncRecordedJikkyoSeek(time);
+                this.updateLastSeekTime();
+                return;
+            }
+
+            localStorage.removeItem(key);
+        }
+
+        /*
+         * 保存済み再生位置がない場合は、CM解析の本編開始位置を使う。
+         *
+         * 解析取得より loadeddata が先に発生する場合があるため、
+         * cmAnalysis がまだ無ければ restored にせず、解析取得後に再試行する。
+         */
+        if (
+            this.cmAnalysis === null ||
+            typeof this.cmAnalysis.timeline.playbackStart !== 'number' ||
+            !isFinite(this.cmAnalysis.timeline.playbackStart)
+        ) {
             return;
         }
 
         this.isPlaybackPositionRestored = true;
 
-        const saved = localStorage.getItem(key);
-        if (saved === null) {
-            return;
-        }
+        const playbackStart =
+            Math.max(
+                0,
+                this.cmAnalysis.timeline.playbackStart
+            );
 
-        const time = Number(saved);
-        const duration = this.getVideoDuration();
+        this.pendingInitialPlaybackPosition = playbackStart;
 
-        if (!isFinite(time) || time < 5 || !isFinite(duration) || duration <= 0 || duration - time <= 30) {
-            localStorage.removeItem(key);
-            return;
-        }
-
-        (this.$refs.video as BaseVideo).setCurrentTime(time);
-        this.currentTime = time;
+        (this.$refs.video as BaseVideo).setCurrentTime(playbackStart);
+        this.currentTime = playbackStart;
         this.updateTimeStr();
-        this.syncRecordedJikkyoSeek(time);
+        this.syncRecordedJikkyoSeek(playbackStart);
         this.updateLastSeekTime();
     }
 
@@ -1470,8 +1770,43 @@ export default class VideoContainer extends Vue {
                     font-size: 12px
                     user-select: none
 
-                .subtitle-icon.disabled, .jikkyo-icon.disabled
+                .cm-skip-icon.disabled, .subtitle-icon.disabled, .jikkyo-icon.disabled
                     opacity: 0.3
+
+                .seekbar-wrap
+                    position: relative
+
+                    .seekbar-analysis
+                        position: absolute
+                        left: 8px
+                        right: 8px
+                        top: 14px
+                        height: 4px
+                        pointer-events: none
+                        z-index: 5
+
+                    .seekbar-playback-boundary-range
+                        position: absolute
+                        top: 0
+                        height: 4px
+                        background-color: #000000
+                        opacity: 1
+
+                    .seekbar-cm-range
+                        position: absolute
+                        top: 0
+                        height: 4px
+                        background-color: #ff9800
+                        opacity: 0.95
+
+                    .seekbar-chapter-marker
+                        position: absolute
+                        top: -4px
+                        width: 2px
+                        height: 12px
+                        margin-left: -1px
+                        background-color: #2196f3
+                        opacity: 0.95
 
         @media screen and (max-width: 420px)
             .left-buttons

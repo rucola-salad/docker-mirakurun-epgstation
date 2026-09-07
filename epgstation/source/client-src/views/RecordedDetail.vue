@@ -13,6 +13,27 @@
                 ></RecordedDetailMoreButton>
             </template>
         </TitleBar>
+        <v-card v-if="currentMaintenanceStatuses.length > 0" class="ma-2 pa-3" outlined>
+            <div v-for="status in currentMaintenanceStatuses" :key="status.action" class="body-2 d-flex align-center">
+                <div class="text-truncate">
+                    <v-icon small class="mr-1">{{ maintenanceStateIcon(status.state) }}</v-icon>
+                    {{ status.action === 'repair' ? '録画修復' : 'チャプター再作成' }}:
+                    {{ maintenanceStateLabel(status.state) }}
+                </div>
+                <v-btn
+                    v-if="canCancelMaintenance(status)"
+                    x-small
+                    text
+                    class="ml-2"
+                    :loading="isCancelingMaintenance(status)"
+                    :disabled="isCancelingMaintenance(status)"
+                    v-on:click="cancelMaintenance(status)"
+                >
+                    <v-icon x-small>mdi-cancel</v-icon>
+                    キャンセル
+                </v-btn>
+            </div>
+        </v-card>
         <v-container>
             <transition name="page">
                 <div v-if="recorded !== null" ref="appContent" class="app-content mx-auto">
@@ -35,9 +56,7 @@
                             </div>
                             <div class="subtitle-1 my-1">{{ recorded.display.channelName }}</div>
                             <div class="subtitle-2 font-weight-light">{{ recorded.display.genre }}</div>
-                            <div class="subtitle-2 font-weight-light">
-                                {{ recorded.display.time }} ({{ recorded.display.duration }} m)
-                            </div>
+                            <div class="subtitle-2 font-weight-light">{{ recorded.display.time }} ({{ recorded.display.duration }} m)</div>
                             <div class="body-2 mt-2 font-weight-light drop" v-bind:class="{ droped: recorded.display.hasDrop === true }" v-on:click="showDropLog">
                                 {{ recorded.display.drop }}
                             </div>
@@ -87,7 +106,7 @@ import RecordedDetailPlayButton from '@/components/recorded/detail/RecordedDetai
 import RecordedDetailSelectStreamDialog from '@/components/recorded/detail/RecordedDetailSelectStreamDialog.vue';
 import RecordedDetailStopEncodeButton from '@/components/recorded/detail/RecordedDetailStopEncodeButton.vue';
 import TitleBar from '@/components/titleBar/TitleBar.vue';
-import IRecordedApiModel from '@/model/api/recorded/IRecordedApiModel';
+import IRecordedApiModel, { RecordedMaintenanceBulkItemState, RecordedMaintenanceStatus } from '@/model/api/recorded/IRecordedApiModel';
 import container from '@/model/ModelContainer';
 import ISocketIOModel from '@/model/socketio/ISocketIOModel';
 import IDropLogDialogState from '@/model/state/dropLog/IDropLogDialogState';
@@ -119,6 +138,10 @@ export default class RecordedDetail extends Vue {
     public isHideExtend = false;
     public isOpenDropLogDialog = false;
     public isGeneratingJikkyo = false;
+    public maintenanceStatuses: RecordedMaintenanceStatus[] = [];
+    public cancelingMaintenanceKeys: string[] = [];
+
+    private isMaintenanceStatusInitialized: boolean = false;
 
     public recordedDetailState: IRecordedDetailState = container.get<IRecordedDetailState>('IRecordedDetailState');
     private dropLogState: IDropLogDialogState = container.get<IDropLogDialogState>('IDropLogDialogState');
@@ -131,10 +154,22 @@ export default class RecordedDetail extends Vue {
     private onUpdateStatusCallback = (async (): Promise<void> => {
         await this.fetchData();
     }).bind(this);
+    private onUpdateMaintenanceCallback = (async (): Promise<void> => {
+        await this.fetchMaintenanceStatus();
+    }).bind(this);
     public streamSelectDialogState: IRecordedDetailSelectStreamState = container.get<IRecordedDetailSelectStreamState>('IRecordedDetailSelectStreamState');
 
     get recorded(): RecordedDisplayData | null {
         return this.recordedDetailState.getRecorded();
+    }
+
+    get currentMaintenanceStatuses(): RecordedMaintenanceStatus[] {
+        const recorded = this.recordedDetailState.getRecorded();
+        if (recorded === null) {
+            return [];
+        }
+
+        return this.maintenanceStatuses.filter(status => status.recordedId === recorded.recordedItem.id);
     }
 
     get hasJikkyo(): boolean {
@@ -150,10 +185,13 @@ export default class RecordedDetail extends Vue {
     public created(): void {
         this.settingValue = this.setting.getSavedValue();
         this.socketIoModel.onUpdateState(this.onUpdateStatusCallback);
+        this.socketIoModel.onUpdateRecordedMaintenance(this.onUpdateMaintenanceCallback);
+        this.fetchMaintenanceStatus().catch(err => console.error(err));
     }
 
     public beforeDestroy(): void {
         this.socketIoModel.offUpdateState(this.onUpdateStatusCallback);
+        this.socketIoModel.offUpdateRecordedMaintenance(this.onUpdateMaintenanceCallback);
     }
 
     public async showDropLog(): Promise<void> {
@@ -233,6 +271,92 @@ export default class RecordedDetail extends Vue {
                 console.error(err);
             });
             await this.scrollState.emitDoneGetData();
+        });
+    }
+
+    public maintenanceStateLabel(state: RecordedMaintenanceBulkItemState): string {
+        switch (state) {
+            case 'queued':
+                return '待機中';
+            case 'checking':
+                return 'TS検査中';
+            case 'repairing':
+                return 'TS修復中';
+            case 'rebuilding-chapters':
+                return 'チャプター再作成中';
+            case 'completed':
+                return '完了';
+            case 'failed':
+                return '失敗';
+            case 'canceled':
+                return 'キャンセル済み';
+        }
+    }
+
+    public maintenanceStateIcon(state: RecordedMaintenanceBulkItemState): string {
+        switch (state) {
+            case 'completed':
+                return 'mdi-check-circle';
+            case 'failed':
+                return 'mdi-alert-circle';
+            case 'canceled':
+                return 'mdi-cancel';
+            case 'queued':
+                return 'mdi-clock-outline';
+            default:
+                return 'mdi-progress-clock';
+        }
+    }
+
+    public canCancelMaintenance(status: RecordedMaintenanceStatus): boolean {
+        return status.origin === 'manual' && status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled';
+    }
+
+    public isCancelingMaintenance(status: RecordedMaintenanceStatus): boolean {
+        return this.cancelingMaintenanceKeys.indexOf(`${status.recordedId}:${status.action}`) !== -1;
+    }
+
+    public async cancelMaintenance(status: RecordedMaintenanceStatus): Promise<void> {
+        if (!this.canCancelMaintenance(status) || this.isCancelingMaintenance(status)) {
+            return;
+        }
+
+        const key = `${status.recordedId}:${status.action}`;
+        this.cancelingMaintenanceKeys.push(key);
+
+        try {
+            await this.recordedApiModel.cancelMaintenance(status.recordedId, status.action);
+            await this.fetchMaintenanceStatus();
+            this.snackbarState.open({
+                color: 'success',
+                text: 'キャンセルを要求しました',
+            });
+        } catch (err) {
+            console.error(err);
+            this.snackbarState.open({
+                color: 'error',
+                text: 'キャンセルに失敗しました',
+            });
+        } finally {
+            this.cancelingMaintenanceKeys = this.cancelingMaintenanceKeys.filter(item => item !== key);
+        }
+    }
+
+    private async fetchMaintenanceStatus(): Promise<void> {
+        const info = await this.recordedApiModel.getMaintenanceInfo();
+
+        if (this.isMaintenanceStatusInitialized === false) {
+            this.maintenanceStatuses = info.statuses.filter(status => status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled');
+            this.isMaintenanceStatusInitialized = true;
+            return;
+        }
+
+        const visibleKeys = new Set(this.maintenanceStatuses.map(status => `${status.recordedId}:${status.action}`));
+
+        this.maintenanceStatuses = info.statuses.filter(status => {
+            const key = `${status.recordedId}:${status.action}`;
+
+            return (status.state !== 'completed' && status.state !== 'failed' && status.state !== 'canceled') || visibleKeys.has(key);
         });
     }
 

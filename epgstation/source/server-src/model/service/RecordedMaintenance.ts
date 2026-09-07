@@ -83,6 +83,7 @@ export const getRecordedAnalysisMarker = async (recordedId: number): Promise<str
 export const repairRecorded = async (
     recordedId: number,
     onStage?: (stage: RecordedMaintenanceStage) => void,
+    signal?: AbortSignal,
 ): Promise<ManualTsRepairResult> => {
     const recordedDB = container.get<IRecordedDB>('IRecordedDB');
     const tsRepairManage = container.get<ITsRepairManageModel>('ITsRepairManageModel');
@@ -108,7 +109,11 @@ export const repairRecorded = async (
     if (typeof onStage !== 'undefined') {
         onStage('checking');
     }
-    const healthy = await tsRepairManage.check(recorded, checkTarget.id);
+    if (signal?.aborted) {
+        throw new Error('recorded maintenance canceled');
+    }
+
+    const healthy = await tsRepairManage.check(recorded, checkTarget.id, signal);
 
     if (healthy === null) {
         throw new RecordedMaintenanceError(500, 'TS health check could not be executed');
@@ -126,7 +131,11 @@ export const repairRecorded = async (
     if (typeof onStage !== 'undefined') {
         onStage('repairing');
     }
-    const repairedVideoFileId = await tsRepairManage.repair(recorded, repairSource.id);
+    if (signal?.aborted) {
+        throw new Error('recorded maintenance canceled');
+    }
+
+    const repairedVideoFileId = await tsRepairManage.repair(recorded, repairSource.id, signal);
 
     if (repairedVideoFileId === null) {
         throw new RecordedMaintenanceError(500, 'TS repair failed');
@@ -140,9 +149,22 @@ export const repairRecorded = async (
     };
 };
 
+const cancelRecordedChapterRebuild = async (
+    recordedId: number,
+): Promise<void> => {
+    await requestCmAnalyzer(
+        'cancel',
+        'POST',
+        {
+            recordedId,
+        },
+    );
+};
+
 export const rebuildRecordedChapters = async (
     recordedId: number,
     onStage?: (stage: RecordedMaintenanceStage) => void,
+    signal?: AbortSignal,
 ): Promise<RebuildChaptersResult> => {
     const recordedDB = container.get<IRecordedDB>('IRecordedDB');
     const channelDB = container.get<IChannelDB>('IChannelDB');
@@ -180,13 +202,61 @@ export const rebuildRecordedChapters = async (
     }
     invalidateRecordedChapterStatus(recordedId);
 
-    const result = await requestCmAnalyzer('analyze', 'POST', {
-        recordedId: recorded.id,
-        recPath,
-        channelName: channel === null ? '' : channel.name,
-        title: recorded.name,
-        sourceVideoFileId: source.id,
-    });
+    if (signal?.aborted) {
+        throw new Error(
+            'recorded maintenance canceled',
+        );
+    }
+
+    const abortHandler = (): void => {
+        void cancelRecordedChapterRebuild(
+            recordedId,
+        ).catch(() => undefined);
+    };
+
+    if (typeof signal !== 'undefined') {
+        signal.addEventListener(
+            'abort',
+            abortHandler,
+            { once: true },
+        );
+    }
+
+    let result;
+
+    try {
+        result = await requestCmAnalyzer(
+            'analyze',
+            'POST',
+            {
+                recordedId: recorded.id,
+                recPath,
+                channelName:
+                    channel === null
+                        ? ''
+                        : channel.name,
+                title: recorded.name,
+                sourceVideoFileId: source.id,
+            },
+        );
+    } finally {
+        if (typeof signal !== 'undefined') {
+            signal.removeEventListener(
+                'abort',
+                abortHandler,
+            );
+        }
+    }
+
+    if (signal?.aborted) {
+        await cancelRecordedChapterRebuild(
+            recordedId,
+        ).catch(() => undefined);
+
+        throw new Error(
+            'recorded maintenance canceled',
+        );
+    }
 
     if (result.statusCode !== 202) {
         throw new RecordedMaintenanceError(502, 'CM analyzer rebuild request failed');
@@ -203,6 +273,7 @@ export const rebuildRecordedChapters = async (
 export const waitForRecordedChapterRebuild = async (
     recordedId: number,
     previousMarker: string | null,
+    signal?: AbortSignal,
 ): Promise<void> => {
     const timeoutMs = Math.max(60000, Number(process.env.CM_ANALYZER_BULK_TIMEOUT_MS) || 7200000);
     const startedAt = Date.now();
@@ -210,7 +281,27 @@ export const waitForRecordedChapterRebuild = async (
     let absentChecks = 0;
 
     while (Date.now() - startedAt < timeoutMs) {
+        if (signal?.aborted) {
+            await cancelRecordedChapterRebuild(
+                recordedId,
+            ).catch(() => undefined);
+
+            throw new Error(
+                'recorded maintenance canceled',
+            );
+        }
+
         await new Promise(resolve => setTimeout(resolve, 2000));
+
+        if (signal?.aborted) {
+            await cancelRecordedChapterRebuild(
+                recordedId,
+            ).catch(() => undefined);
+
+            throw new Error(
+                'recorded maintenance canceled',
+            );
+        }
 
         const marker = await getRecordedAnalysisMarker(recordedId);
         if (marker !== null && marker !== previousMarker) {

@@ -12,6 +12,10 @@ import IRecordingManageModel from '../operator/recording/IRecordingManageModel';
 import IReservationManageModel from '../operator/reservation/IReservationManageModel';
 import IThumbnailManageModel from '../operator/thumbnail/IThumbnailManageModel';
 import ITsRepairManageModel from '../operator/tsRepair/ITsRepairManageModel';
+import {
+    addAutomaticRecordedMaintenance,
+    setRecordedMaintenanceStatus,
+} from '../service/RecordedMaintenanceQueue';
 import IOperatorEncodeEvent from './IOperatorEncodeEvent';
 import IEPGUpdateEvent from './IEPGUpdateEvent';
 import IEventSetter from './IEventSetter';
@@ -217,9 +221,21 @@ export default class EventSetter implements IEventSetter {
                 const dropCnt = recorded.dropLogFile?.dropCnt;
 
                 if (typeof dropCnt === 'number' && dropCnt > 0) {
-                    const repairedVideoFileId = await this.tsRepairManage.repair(
-                        recorded,
-                        primaryVideoFileId,
+                    const repairedVideoFileId = await addAutomaticRecordedMaintenance(
+                        recorded.id,
+                        'repair',
+                        () => {
+                            setRecordedMaintenanceStatus(
+                                recorded.id,
+                                'repair',
+                                'automatic',
+                                'repairing',
+                            );
+                            return this.tsRepairManage.repair(
+                                recorded,
+                                primaryVideoFileId as apid.VideoFileId,
+                            );
+                        },
                     );
 
                     if (repairedVideoFileId !== null) {

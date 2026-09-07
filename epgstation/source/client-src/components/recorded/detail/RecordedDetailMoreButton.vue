@@ -27,11 +27,7 @@
                     <v-list-item-icon class="mr-3"><v-icon>mdi-format-list-bulleted</v-icon></v-list-item-icon>
                     <v-list-item-content><v-list-item-title>チャプター再作成</v-list-item-title></v-list-item-content>
                 </v-list-item>
-                <v-list-item
-                    v-if="recordedItem.isRecording === false"
-                    :disabled="isGeneratingJikkyo || hasJikkyo"
-                    v-on:click="generateJikkyo"
-                >
+                <v-list-item v-if="recordedItem.isRecording === false" :disabled="isGeneratingJikkyo || hasJikkyo" v-on:click="generateJikkyo">
                     <v-list-item-icon class="mr-3"><v-icon>mdi-comment-text-outline</v-icon></v-list-item-icon>
                     <v-list-item-content><v-list-item-title>実況XML生成</v-list-item-title></v-list-item-content>
                 </v-list-item>
@@ -145,10 +141,10 @@ export default class RecordedDetailMoreButton extends Vue {
         this.isRebuildingChapters = true;
         this.isOpened = false;
         try {
-            const result = await this.recordedApiModel.rebuildChapters(this.recordedItem.id);
+            await this.recordedApiModel.rebuildChapters(this.recordedItem.id);
             this.snackbarState.open({
                 color: 'success',
-                text: `チャプター再作成を開始しました (${result.sourceName})`,
+                text: 'チャプター再作成を開始しました',
             });
         } catch (err) {
             console.error(err);

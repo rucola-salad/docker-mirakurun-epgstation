@@ -3,7 +3,7 @@
 set -u
 
 LOG=/app/logs/recording-finish.log
-CM_ANALYZER_URL="${CM_ANALYZER_URL:-http://cm-analyzer:8080/analyze}"
+CM_ANALYZER_URL="${CM_ANALYZER_URL:-http://cm-analyzer:8080}"
 
 log()
 {
@@ -49,7 +49,7 @@ BODY=$(cat <<JSON
 JSON
 )
 
-node - "$CM_ANALYZER_URL" "$BODY" >> "$LOG" 2>&1 <<'NODE'
+node - "${CM_ANALYZER_URL%/}/analyze" "$BODY" >> "$LOG" 2>&1 <<'NODE'
 const http = require('http');
 
 const url = new URL(process.argv[2]);

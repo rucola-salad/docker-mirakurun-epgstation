@@ -6,6 +6,7 @@ import IRecordedApiModel, {
     RebuildChaptersResult,
     RecordedMaintenanceBulkAction,
     RecordedMaintenanceBulkJob,
+    RecordedMaintenanceInfo,
 } from './IRecordedApiModel';
 
 @injectable()
@@ -73,16 +74,22 @@ export default class RecordedApiModel implements IRecordedApiModel {
         return result.data;
     }
 
-    public async getBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null> {
+    public async getMaintenanceInfo(): Promise<RecordedMaintenanceInfo> {
         const result = await this.repository.get('/recorded/bulk-maintenance');
+        return result.data;
+    }
+
+    public async startBulkMaintenanceJob(action: RecordedMaintenanceBulkAction, recordedIds: apid.RecordedId[]): Promise<RecordedMaintenanceBulkJob> {
+        const result = await this.repository.post('/recorded/bulk-maintenance', { action, recordedIds });
         return result.data.job;
     }
 
-    public async startBulkMaintenanceJob(
-        action: RecordedMaintenanceBulkAction,
-        recordedIds: apid.RecordedId[],
-    ): Promise<RecordedMaintenanceBulkJob> {
-        const result = await this.repository.post('/recorded/bulk-maintenance', { action, recordedIds });
+    public async cancelMaintenance(recordedId: apid.RecordedId, action: RecordedMaintenanceBulkAction): Promise<void> {
+        await this.repository.post(`/recorded/${recordedId.toString(10)}/maintenance/cancel`, { action });
+    }
+
+    public async cancelBulkMaintenanceJob(): Promise<RecordedMaintenanceBulkJob | null> {
+        const result = await this.repository.post('/recorded/bulk-maintenance/cancel');
         return result.data.job;
     }
 }

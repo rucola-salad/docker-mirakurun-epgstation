@@ -5,9 +5,13 @@ import {
     startRecordedMaintenanceBulkJob,
 } from '../../RecordedMaintenanceBulkJob';
 import * as api from '../../api';
+import { getRecordedMaintenanceStatuses } from '../../RecordedMaintenanceQueue';
 
 export const get: Operation = async (_req, res) => {
-    api.responseJSON(res, 200, { job: getRecordedMaintenanceBulkJob() });
+    api.responseJSON(res, 200, {
+        job: getRecordedMaintenanceBulkJob(),
+        statuses: getRecordedMaintenanceStatuses(),
+    });
 };
 
 export const post: Operation = async (req, res) => {
