@@ -5,6 +5,9 @@
                 <RecordedDetailMoreButton
                     v-if="recorded !== null"
                     :recordedItem="recorded.recordedItem"
+                    :isGeneratingJikkyo="isGeneratingJikkyo"
+                    :hasJikkyo="hasJikkyo"
+                    v-on:generateJikkyo="generateJikkyo"
                     v-on:download="downloadVideo"
                     v-on:downloadPlayList="downloadPlayList"
                 ></RecordedDetailMoreButton>
@@ -62,12 +65,6 @@
                                 <div class="d-flex flex-wrap">
                                     <RecordedDetailEncodeButton :recordedItem="recorded.recordedItem" :videoFiles="recorded.display.videoFiles"></RecordedDetailEncodeButton>
                                     <RecordedDetailStopEncodeButton :recordedItem="recorded.recordedItem" v-on:stopEncode="stopEncode"></RecordedDetailStopEncodeButton>
-                                    <RecordedDetailJikkyoButton
-                                        :recordedItem="recorded.recordedItem"
-                                        :isGenerating="isGeneratingJikkyo"
-                                        :hasJikkyo="hasJikkyo"
-                                        v-on:generateJikkyo="generateJikkyo"
-                                    ></RecordedDetailJikkyoButton>
                                 </div>
                                 <RecordedDetailKodiButton :recordedItem="recorded.recordedItem" :videoFiles="recorded.display.videoFiles"></RecordedDetailKodiButton>
                             </div>
@@ -92,7 +89,6 @@
 <script lang="ts">
 import DropLogDialog from '@/components/dropLog/DropLogDialog.vue';
 import RecordedDetailEncodeButton from '@/components/recorded/detail/RecordedDetailEncodeButton.vue';
-import RecordedDetailJikkyoButton from '@/components/recorded/detail/RecordedDetailJikkyoButton.vue';
 import RecordedDetailKodiButton from '@/components/recorded/detail/RecordedDetailKodiButton.vue';
 import RecordedDetailMoreButton from '@/components/recorded/detail/RecordedDetailMoreButton.vue';
 import RecordedDetailPlayButton from '@/components/recorded/detail/RecordedDetailPlayButton.vue';
@@ -120,7 +116,6 @@ Component.registerHooks(['beforeRouteUpdate', 'beforeRouteLeave']);
         TitleBar,
         RecordedDetailPlayButton,
         RecordedDetailEncodeButton,
-        RecordedDetailJikkyoButton,
         RecordedDetailStopEncodeButton,
         RecordedDetailMoreButton,
         RecordedDetailSelectStreamDialog,
