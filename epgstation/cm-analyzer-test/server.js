@@ -1483,6 +1483,130 @@ function buildAnalysis(outputRoot, metadata) {
     };
 }
 
+async function prepareJlseInput(
+    workInput,
+    recordedId
+) {
+    if (
+        path.extname(workInput).toLowerCase() === '.ts'
+    ) {
+        return {
+            inputPath: workInput,
+            temporary: false,
+        };
+    }
+
+    const remuxDir =
+        path.join(
+            LOGO_COLLECT_TMP_ROOT,
+            'jlse-remux',
+            String(recordedId)
+        );
+
+    fs.mkdirSync(
+        remuxDir,
+        { recursive: true }
+    );
+
+    const jlseInput =
+        path.join(
+            remuxDir,
+            `${path.basename(
+                workInput,
+                path.extname(workInput)
+            )}.ts`
+        );
+
+    for (const cleanupPath of [
+        jlseInput,
+        `${jlseInput}.lwi`,
+    ]) {
+        if (fs.existsSync(cleanupPath)) {
+            fs.unlinkSync(cleanupPath);
+        }
+    }
+
+    log(
+        'non-ts input; remuxing for jlse',
+        `recordedId=${recordedId}`,
+        `source=${workInput}`,
+        `output=${jlseInput}`
+    );
+
+    try {
+        await spawnAndWait(
+            FFMPEG_COMMAND,
+            [
+                '-hide_banner',
+                '-loglevel',
+                'warning',
+                '-y',
+                '-i',
+                workInput,
+                '-map',
+                '0:v:0',
+                '-map',
+                '0:a:0?',
+                '-c',
+                'copy',
+                '-muxdelay',
+                '0',
+                '-f',
+                'mpegts',
+                jlseInput,
+            ],
+            {
+                stdio: [
+                    'ignore',
+                    'inherit',
+                    'inherit',
+                ],
+            },
+            String(recordedId)
+        );
+
+        if (!isUsableFile(jlseInput)) {
+            throw new Error(
+                `temporary jlse ts is invalid: ${jlseInput}`
+            );
+        }
+    } catch (err) {
+        for (const cleanupPath of [
+            jlseInput,
+            `${jlseInput}.lwi`,
+        ]) {
+            if (!fs.existsSync(cleanupPath)) {
+                continue;
+            }
+
+            try {
+                fs.unlinkSync(cleanupPath);
+            } catch (cleanupErr) {
+                log(
+                    'temporary jlse file cleanup failed',
+                    `recordedId=${recordedId}`,
+                    `path=${cleanupPath}`,
+                    cleanupErr
+                );
+            }
+        }
+
+        throw err;
+    }
+
+    log(
+        'non-ts remux finished',
+        `recordedId=${recordedId}`,
+        `input=${jlseInput}`
+    );
+
+    return {
+        inputPath: jlseInput,
+        temporary: true,
+    };
+}
+
+
 async function runAnalysis(job) {
     running = true;
     currentJob = job;
@@ -1519,6 +1643,8 @@ async function runAnalysis(job) {
             workDir,
             `${channelName}_${sourceBase}`
         );
+
+    let jlseInputInfo = null;
 
     try {
         if (fs.existsSync(workInput)) {
@@ -1597,9 +1723,23 @@ async function runAnalysis(job) {
             })
         );
 
+        jlseInputInfo =
+            await prepareJlseInput(
+                workInput,
+                String(job.recordedId)
+            );
+
+        const resultName =
+            path.basename(
+                jlseInputInfo.inputPath,
+                path.extname(
+                    jlseInputInfo.inputPath
+                )
+            );
+
         const jlseArgs = [
             '-i',
-            workInput,
+            jlseInputInfo.inputPath,
         ];
 
         if (noLogo) {
@@ -1609,6 +1749,7 @@ async function runAnalysis(job) {
         log(
             'jlse start',
             `recordedId=${job.recordedId}`,
+            `input=${jlseInputInfo.inputPath}`,
             `noLogo=${noLogo}`
         );
 
@@ -1641,12 +1782,6 @@ async function runAnalysis(job) {
             `recordedId=${job.recordedId}`,
             'exit=0'
         );
-
-        const resultName =
-            path.basename(
-                workInput,
-                path.extname(workInput)
-            );
 
         const sourceResult =
             path.join(
@@ -1770,6 +1905,37 @@ async function runAnalysis(job) {
             err
         );
     } finally {
+        if (
+            jlseInputInfo !== null &&
+            jlseInputInfo.temporary
+        ) {
+            for (const cleanupPath of [
+                jlseInputInfo.inputPath,
+                `${jlseInputInfo.inputPath}.lwi`,
+            ]) {
+                if (!fs.existsSync(cleanupPath)) {
+                    continue;
+                }
+
+                try {
+                    fs.unlinkSync(cleanupPath);
+
+                    log(
+                        'temporary jlse file deleted',
+                        `recordedId=${job.recordedId}`,
+                        `path=${cleanupPath}`
+                    );
+                } catch (err) {
+                    log(
+                        'temporary jlse file delete failed',
+                        `recordedId=${job.recordedId}`,
+                        `path=${cleanupPath}`,
+                        err
+                    );
+                }
+            }
+        }
+
         canceledRecordedIds.delete(
             String(job.recordedId)
         );
