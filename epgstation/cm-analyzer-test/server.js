@@ -31,6 +31,26 @@ const FFPROBE_COMMAND =
     process.env.FFPROBE_COMMAND ||
     'ffprobe';
 
+const EPGSTATION_URL =
+    process.env.EPGSTATION_URL || 'http://epgstation-custom-test:8888';
+const MIRAKURUN_URL =
+    process.env.MIRAKURUN_URL || 'http://mirakurun:40772';
+const LOGO_COLLECT_ENABLED =
+    String(process.env.LOGO_COLLECT_ENABLED || 'false').toLowerCase() === 'true';
+const LOGO_COLLECT_TMP_ROOT =
+    process.env.LOGO_COLLECT_TMP_ROOT || '/logo-collector-tmp';
+const LOGO_COLLECT_INTERVAL_MINUTES =
+    Number(process.env.LOGO_COLLECT_INTERVAL_MINUTES || 60);
+const LOGO_COLLECT_SAMPLE_SECONDS =
+    Number(process.env.LOGO_COLLECT_SAMPLE_SECONDS || 600);
+const LOGO_COLLECT_STATE_PATH =
+    path.join(DATA_ROOT, 'logo-collector-state.json');
+const LOGO_COLLECT_PRIORITY = 0;
+const LOGO_COLLECT_BACKOFF_FAILURES = 6;
+const LOGO_COLLECT_SUSPEND_FAILURES = 24;
+const LOGO_COLLECT_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const LOGO_COLLECT_SUSPEND_MS = 7 * 24 * 60 * 60 * 1000;
+
 const parseChannel =
     require(path.join(JLSE_ROOT, 'src/channel')).parse;
 
@@ -675,22 +695,14 @@ function validateStationId(stationId) {
     }
 }
 
-async function prepareLogo(
+async function prepareLogoForStation(
     workInput,
     channelName,
-    recordedId
+    stationId,
+    recordedId = null,
+    throwOnGenerationFailure = false
 ) {
-    const channel = parseChannel(workInput);
-
-    if (!channel || !channel.short) {
-        throw new Error(
-            `channel not recognized: ${path.basename(workInput)}`
-        );
-    }
-
-    const stationId =
-        String(channel.short);
-
+    stationId = String(stationId);
     validateStationId(stationId);
 
     fs.mkdirSync(
@@ -790,7 +802,9 @@ async function prepareLogo(
                     stationId,
                 ],
                 {},
-                String(recordedId)
+                recordedId === null
+                    ? null
+                    : String(recordedId)
             );
 
         if (!isUsableFile(candidateLogoPath)) {
@@ -892,7 +906,7 @@ async function prepareLogo(
          * 新候補生成失敗時も、
          * 既存LGDがあればそれを維持する。
          */
-        if (existingLogo) {
+        if (existingLogo && !throwOnGenerationFailure) {
             log(
                 'logo generation failed; using existing logo',
                 `station=${stationId}`,
@@ -933,6 +947,29 @@ async function prepareLogo(
         logoGenerated: true,
     };
 }
+
+
+async function prepareLogo(
+    workInput,
+    channelName,
+    recordedId
+) {
+    const channel = parseChannel(workInput);
+
+    if (!channel || !channel.short) {
+        throw new Error(
+            `channel not recognized: ${path.basename(workInput)}`
+        );
+    }
+
+    return prepareLogoForStation(
+        workInput,
+        channelName,
+        String(channel.short),
+        recordedId
+    );
+}
+
 
 function parseTime(value) {
     const match =
@@ -1637,6 +1674,588 @@ async function runAnalysis(job) {
 }
 
 
+
+function collectorHttpGetBuffer(url) {
+    return new Promise((resolve, reject) => {
+        const req = http.get(url, res => {
+            const chunks = [];
+            res.on('data', c => chunks.push(Buffer.from(c)));
+            res.on('end', () => {
+                const body = Buffer.concat(chunks);
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(`GET ${url} failed: HTTP ${res.statusCode}`));
+                    return;
+                }
+                resolve(body);
+            });
+        });
+        req.setTimeout(10000, () => req.destroy(new Error(`GET ${url} timed out`)));
+        req.on('error', reject);
+    });
+}
+
+async function loadEpgstationChannels() {
+    const body = await collectorHttpGetBuffer(
+        `${EPGSTATION_URL}/api/channels?isHalfWidth=false`
+    );
+    const value = JSON.parse(body.toString('utf8'));
+    if (!Array.isArray(value)) {
+        throw new Error('EPGStation channels response is not an array');
+    }
+    return value;
+}
+
+function normalizeCollectorChannelName(value) {
+    return String(value || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+}
+
+function loadCollectorChannelMappings() {
+    const csvPath = path.join(JLSE_ROOT, 'setting/ChList.csv');
+    const lines = fs.readFileSync(csvPath, 'utf8').split(/\r?\n/).slice(1);
+    const mappings = [];
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        const columns = line.split(',');
+        if (columns.length < 3) continue;
+        const stationId = String(columns[2] || '').trim();
+        if (!stationId) continue;
+        validateStationId(stationId);
+        for (const raw of [columns[0], columns[1]]) {
+            const name = String(raw || '').trim();
+            if (!name) continue;
+            mappings.push({
+                name,
+                normalized: normalizeCollectorChannelName(name),
+                stationId,
+            });
+        }
+    }
+
+    // Current names for legacy ChList entries.
+    for (const [name, stationId] of [
+        ['NHK BS', 'BS1'],
+        ['BSテレ東', 'BSJ'],
+    ]) {
+        mappings.push({
+            name,
+            normalized: normalizeCollectorChannelName(name),
+            stationId,
+        });
+    }
+    return mappings;
+}
+
+function resolveCollectorStation(channelName, mappings) {
+    const normalized = normalizeCollectorChannelName(channelName);
+    if (!normalized) return null;
+
+    for (const mapping of mappings) {
+        if (mapping.normalized === normalized) return mapping.stationId;
+    }
+
+    let best = null;
+    for (const mapping of mappings) {
+        if (mapping.normalized.length < 3) continue;
+        if (
+            normalized.includes(mapping.normalized) ||
+            mapping.normalized.includes(normalized)
+        ) {
+            if (!best || mapping.normalized.length > best.normalized.length) {
+                best = mapping;
+            }
+        }
+    }
+    return best ? best.stationId : null;
+}
+
+function readCollectorState() {
+    try {
+        const value = JSON.parse(fs.readFileSync(LOGO_COLLECT_STATE_PATH, 'utf8'));
+        if (value && typeof value === 'object' &&
+            value.stations && typeof value.stations === 'object') {
+            return value;
+        }
+    } catch (_) {}
+    return {
+        version: 1,
+        stations: {},
+        unsupported: {},
+    };
+}
+
+function writeCollectorState(state) {
+    if (!state.unsupported || typeof state.unsupported !== 'object') {
+        state.unsupported = {};
+    }
+
+    fs.mkdirSync(DATA_ROOT, { recursive: true });
+    const tmp = `${LOGO_COLLECT_STATE_PATH}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, LOGO_COLLECT_STATE_PATH);
+}
+
+function collectorLogoStatus(stationId) {
+    const logoPath = path.join(LOGO_ROOT, `${stationId}.lgd`);
+    const metaPath = path.join(LOGO_ROOT, `${stationId}.lgd.meta.json`);
+    const hasLogo = isUsableFile(logoPath);
+    const quality = readLogoQuality(metaPath);
+    if (hasLogo && isHighQualityLogo(quality)) {
+        return { status: 'good', qualityScore: quality.qualityScore };
+    }
+    if (hasLogo) {
+        return { status: 'improving', qualityScore: quality ? quality.qualityScore : null };
+    }
+    return { status: 'missing', qualityScore: null };
+}
+
+function updateUnsupportedCollectorState(channels, state) {
+    const mappings = loadCollectorChannelMappings();
+    const unsupported = {};
+
+    for (const channel of channels) {
+        const stationId =
+            resolveCollectorStation(channel.name, mappings);
+
+        if (stationId) {
+            continue;
+        }
+
+        const serviceId = Number(channel.id);
+        if (!Number.isFinite(serviceId)) {
+            continue;
+        }
+
+        const key = String(channel.id);
+
+        unsupported[key] = {
+            serviceId: key,
+            channelName: String(channel.name || ''),
+            channelType: String(channel.channelType || ''),
+            physicalChannel: String(channel.channel || ''),
+            status: 'unsupported',
+            qualityScore: null,
+        };
+    }
+
+    state.unsupported = unsupported;
+}
+
+function buildCollectorStations(channels) {
+    const mappings = loadCollectorChannelMappings();
+    const stations = new Map();
+    for (const channel of channels) {
+        const stationId = resolveCollectorStation(channel.name, mappings);
+        if (!stationId || stations.has(stationId)) continue;
+        const serviceId = Number(channel.id);
+        if (!Number.isFinite(serviceId)) continue;
+        stations.set(stationId, {
+            stationId,
+            channelName: String(channel.name || ''),
+            serviceId: String(channel.id),
+            channelType: String(channel.channelType || ''),
+            physicalChannel: String(channel.channel || ''),
+        });
+    }
+    return [...stations.values()];
+}
+
+function collectorDelayMs(failures) {
+    if (failures >= LOGO_COLLECT_SUSPEND_FAILURES) return LOGO_COLLECT_SUSPEND_MS;
+    if (failures >= LOGO_COLLECT_BACKOFF_FAILURES) return LOGO_COLLECT_BACKOFF_MS;
+    return LOGO_COLLECT_INTERVAL_MINUTES * 60 * 1000;
+}
+
+function collectorStateName(logoStatus, failures) {
+    if (logoStatus === 'good') return 'good';
+    if (failures >= LOGO_COLLECT_SUSPEND_FAILURES) return 'suspended';
+    if (failures >= LOGO_COLLECT_BACKOFF_FAILURES) return 'backoff';
+    return logoStatus;
+}
+
+function pruneCollectorStationState(stations, state) {
+    if (!state.stations || typeof state.stations !== 'object') {
+        state.stations = {};
+        return;
+    }
+
+    const currentStationIds =
+        new Set(
+            stations.map(
+                station => station.stationId
+            )
+        );
+
+    for (const stationId of Object.keys(state.stations)) {
+        if (!currentStationIds.has(stationId)) {
+            delete state.stations[stationId];
+        }
+    }
+}
+
+function selectCollectorTarget(stations, state, worker) {
+    const now = Date.now();
+    const candidates = [];
+    for (const station of stations) {
+        const matchesWorker =
+            worker === 'GR'
+                ? station.channelType === 'GR'
+                : (station.channelType === 'BS' || station.channelType === 'CS');
+
+        if (!matchesWorker) {
+            continue;
+        }
+        const logo = collectorLogoStatus(station.stationId);
+        const prev = state.stations[station.stationId] || {};
+        const failures = Number(prev.consecutiveDetectionFailures || 0);
+        const status = collectorStateName(logo.status, failures);
+        state.stations[station.stationId] = {
+            ...prev,
+            ...station,
+            status,
+            logoStatus: logo.status,
+            qualityScore: logo.qualityScore,
+        };
+        const next = Date.parse(prev.nextCollectAt || '');
+        const due = !Number.isFinite(next) || next <= now;
+        if (status !== 'good' && due) {
+            candidates.push({
+                ...station,
+                logoStatus: logo.status,
+                qualityScore: logo.qualityScore,
+                failures,
+                lastCollectAt: prev.lastCollectAt || '',
+            });
+        }
+    }
+    candidates.sort((a, b) => {
+        const statusPriority = value =>
+            value === 'missing' ? 0 : 1;
+
+        const channelPriority = value => {
+            if (value === 'GR') return 0;
+            if (value === 'BS') return 1;
+            if (value === 'CS') return 2;
+            return 3;
+        };
+
+        const as = statusPriority(a.logoStatus);
+        const bs = statusPriority(b.logoStatus);
+        if (as !== bs) return as - bs;
+
+        const ac = channelPriority(a.channelType);
+        const bc = channelPriority(b.channelType);
+        if (ac !== bc) return ac - bc;
+
+        const aq = a.qualityScore == null ? -1 : a.qualityScore;
+        const bq = b.qualityScore == null ? -1 : b.qualityScore;
+        if (aq !== bq) return aq - bq;
+
+        return a.lastCollectAt.localeCompare(b.lastCollectAt);
+    });
+    return candidates[0] || null;
+}
+
+function sampleLiveService(station, outputPath) {
+    return new Promise((resolve, reject) => {
+        const url = `${MIRAKURUN_URL}/api/services/${encodeURIComponent(station.serviceId)}/stream`;
+        const file = fs.createWriteStream(outputPath, { flags: 'wx' });
+        let req = null;
+        let res = null;
+        let settled = false;
+        let bytes = 0;
+        let timer = null;
+
+        const finish = (kind, err = null) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (req) req.destroy();
+            if (res) res.destroy();
+            file.end(() => err ? reject(err) : resolve({ kind, bytes }));
+        };
+
+        file.on('error', err => finish('transport-failure', err));
+
+        req = http.get(url, {
+            headers: { 'X-Mirakurun-Priority': String(LOGO_COLLECT_PRIORITY) },
+        }, response => {
+            res = response;
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                finish('transport-failure',
+                    new Error(`Mirakurun stream HTTP ${res.statusCode}`));
+                return;
+            }
+            res.on('data', chunk => {
+                bytes += chunk.length;
+                if (!file.write(chunk)) {
+                    res.pause();
+                    file.once('drain', () => res.resume());
+                }
+            });
+            res.on('end', () => finish('preempted'));
+            res.on('aborted', () => finish('preempted'));
+            res.on('error', () => finish('preempted'));
+        });
+
+        req.on('error', err => {
+            if (!settled) finish('transport-failure', err);
+        });
+
+        timer = setTimeout(
+            () => finish('complete'),
+            LOGO_COLLECT_SAMPLE_SECONDS * 1000
+        );
+    });
+}
+
+async function getCollectorSampleDuration(filePath) {
+    const result = await spawnAndCapture(
+        FFPROBE_COMMAND,
+        ['-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'default=noprint_wrappers=1:nokey=1', filePath]
+    );
+    const duration = Number(result.stdout.trim());
+    if (!Number.isFinite(duration) || duration <= 0) {
+        throw new Error(`invalid collector sample duration: ${result.stdout.trim()}`);
+    }
+    return duration;
+}
+
+function updateCollectorState(state, station, detectionResult, detail) {
+    const now = new Date();
+    const prev = state.stations[station.stationId] || {};
+    const oldFailures = Number(prev.consecutiveDetectionFailures || 0);
+    let failures = oldFailures;
+
+    if (detectionResult === true) failures = 0;
+    if (detectionResult === false) failures = oldFailures + 1;
+
+    const logo = collectorLogoStatus(station.stationId);
+    const delay = logo.status === 'good'
+        ? null
+        : (detectionResult === null
+            ? LOGO_COLLECT_INTERVAL_MINUTES * 60 * 1000
+            : collectorDelayMs(failures));
+
+    state.stations[station.stationId] = {
+        ...prev,
+        ...station,
+        lastCollectAt: now.toISOString(),
+        nextCollectAt: delay === null ? null
+            : new Date(now.getTime() + delay).toISOString(),
+        consecutiveDetectionFailures: failures,
+        status: collectorStateName(logo.status, failures),
+        logoStatus: logo.status,
+        qualityScore: logo.qualityScore,
+        lastResult: detail,
+    };
+}
+
+function updateLatestCollectorStationState(
+    station,
+    detectionResult,
+    detail
+) {
+    /*
+     * GR / BSCS workers can run concurrently.
+     * Re-read the latest state immediately before updating one station
+     * so one worker cannot overwrite the other worker's completed result.
+     */
+    const latestState = readCollectorState();
+
+    updateCollectorState(
+        latestState,
+        station,
+        detectionResult,
+        detail
+    );
+
+    writeCollectorState(latestState);
+}
+
+const logoCollectorRunning = {
+    GR: false,
+    BSCS: false,
+};
+
+async function runLogoCollectorOnce(worker) {
+    if (
+        !LOGO_COLLECT_ENABLED ||
+        !Object.prototype.hasOwnProperty.call(logoCollectorRunning, worker) ||
+        logoCollectorRunning[worker]
+    ) return;
+
+    // Normal CM analysis always wins CPU/I/O scheduling.
+    if (running || jobQueue.length > 0) return;
+
+    logoCollectorRunning[worker] = true;
+    let samplePath = null;
+
+    try {
+        fs.mkdirSync(LOGO_COLLECT_TMP_ROOT, { recursive: true });
+        const state = readCollectorState();
+        const channels = await loadEpgstationChannels();
+
+        updateUnsupportedCollectorState(
+            channels,
+            state
+        );
+
+        const stations = buildCollectorStations(channels);
+
+        pruneCollectorStationState(
+            stations,
+            state
+        );
+
+        const target = selectCollectorTarget(stations, state, worker);
+        writeCollectorState(state);
+        if (!target) return;
+
+        samplePath = path.join(
+            LOGO_COLLECT_TMP_ROOT,
+            `logo-${target.stationId}-${process.pid}-${Date.now()}.ts`
+        );
+
+        log('logo collector sample start',
+            `worker=${worker}`,
+            `station=${target.stationId}`,
+            `channel=${target.channelName}`,
+            `serviceId=${target.serviceId}`,
+            `priority=${LOGO_COLLECT_PRIORITY}`,
+            `seconds=${LOGO_COLLECT_SAMPLE_SECONDS}`);
+
+        let sample;
+        try {
+            sample = await sampleLiveService(target, samplePath);
+        } catch (err) {
+            log('logo collector sample failed', `station=${target.stationId}`, err);
+            updateLatestCollectorStationState(
+                target,
+                null,
+                'stream-failure'
+            );
+            return;
+        }
+
+        if (sample.kind !== 'complete' || !isUsableFile(samplePath)) {
+            log('logo collector sample interrupted',
+                `station=${target.stationId}`, `kind=${sample.kind}`, `bytes=${sample.bytes}`);
+            updateLatestCollectorStationState(
+                target,
+                null,
+                'preempted'
+            );
+            return;
+        }
+
+        let duration;
+        try {
+            duration = await getCollectorSampleDuration(samplePath);
+        } catch (err) {
+            log('logo collector sample probe failed', `station=${target.stationId}`, err);
+            updateLatestCollectorStationState(
+                target,
+                null,
+                'incomplete-sample'
+            );
+            return;
+        }
+
+        const minimumDuration = Math.max(
+            LOGO_COLLECT_SAMPLE_SECONDS - 10,
+            LOGO_COLLECT_SAMPLE_SECONDS * 0.95
+        );
+        if (duration < minimumDuration) {
+            log('logo collector sample too short',
+                `station=${target.stationId}`,
+                `duration=${duration.toFixed(3)}`,
+                `required=${minimumDuration.toFixed(3)}`);
+            updateLatestCollectorStationState(
+                target,
+                null,
+                'incomplete-sample'
+            );
+            return;
+        }
+
+        try {
+            await prepareLogoForStation(
+                samplePath, target.channelName, target.stationId, null, true
+            );
+            updateLatestCollectorStationState(
+                target,
+                true,
+                'logo-evaluated'
+            );
+        } catch (err) {
+            log('logo collector detection failed', `station=${target.stationId}`, err);
+            updateLatestCollectorStationState(
+                target,
+                false,
+                'logo-detection-failed'
+            );
+        }
+    } catch (err) {
+        log('logo collector cycle failed', err);
+    } finally {
+        if (samplePath && fs.existsSync(samplePath)) {
+            try {
+                fs.unlinkSync(samplePath);
+                log('logo collector sample deleted', samplePath);
+            } catch (err) {
+                log('logo collector sample delete failed', samplePath, err);
+            }
+        }
+        logoCollectorRunning[worker] = false;
+    }
+}
+
+function cleanupLogoCollectorTempFiles() {
+    fs.mkdirSync(LOGO_COLLECT_TMP_ROOT, { recursive: true });
+
+    for (const name of fs.readdirSync(LOGO_COLLECT_TMP_ROOT)) {
+        if (!/^logo-[A-Za-z0-9_-]+-\d+-\d+\.ts$/.test(name)) {
+            continue;
+        }
+
+        const filePath = path.join(LOGO_COLLECT_TMP_ROOT, name);
+
+        try {
+            fs.unlinkSync(filePath);
+            log('logo collector stale sample deleted', filePath);
+        } catch (err) {
+            log('logo collector stale sample delete failed', filePath, err);
+        }
+    }
+}
+
+function scheduleLogoCollector() {
+    if (!LOGO_COLLECT_ENABLED) {
+        log('logo collector disabled');
+        return;
+    }
+
+    cleanupLogoCollectorTempFiles();
+
+    log('logo collector enabled',
+        `epgstation=${EPGSTATION_URL}`,
+        `mirakurun=${MIRAKURUN_URL}`,
+        `tmp=${LOGO_COLLECT_TMP_ROOT}`,
+        `sampleSeconds=${LOGO_COLLECT_SAMPLE_SECONDS}`,
+        `intervalMinutes=${LOGO_COLLECT_INTERVAL_MINUTES}`,
+        `priority=${LOGO_COLLECT_PRIORITY}`);
+
+    const runWorkers = () => {
+        runLogoCollectorOnce('GR');
+        runLogoCollectorOnce('BSCS');
+    };
+
+    setTimeout(runWorkers, 5000);
+    setInterval(runWorkers, 60 * 1000);
+}
+
+
 function createLogoPreviewPng(
     logoPath
 ) {
@@ -1996,40 +2615,23 @@ async function loadAnalysisForPlayback(
 
 
 function listLogos() {
-    if (!fs.existsSync(LOGO_ROOT)) {
-        return [];
-    }
+    const resultByKey = new Map();
+    const state = readCollectorState();
 
-    const result = [];
-
-    for (const name of fs.readdirSync(LOGO_ROOT)) {
-        if (!name.endsWith('.lgd')) {
-            continue;
-        }
-
-        const stationId =
-            name.substring(
-                0,
-                name.length - '.lgd'.length
-            );
-
-        if (
-            !/^[A-Za-z0-9_-]+$/.test(
-                stationId
-            )
-        ) {
+    /*
+     * Collector対象局を先に登録する。
+     * LGD未生成のmissing/backoff/suspendedも一覧へ出す。
+     */
+    for (const [stationId, item] of Object.entries(state.stations || {})) {
+        if (!/^[A-Za-z0-9_-]+$/.test(stationId)) {
             continue;
         }
 
         const logoPath =
             path.join(
                 LOGO_ROOT,
-                name
+                `${stationId}.lgd`
             );
-
-        if (!isUsableFile(logoPath)) {
-            continue;
-        }
 
         const metaPath =
             path.join(
@@ -2037,43 +2639,248 @@ function listLogos() {
                 `${stationId}.lgd.meta.json`
             );
 
-        const quality =
-            readLogoQuality(metaPath);
+        const hasLogo =
+            isUsableFile(logoPath);
 
-        result.push({
-            stationId,
-            channelName:
-                quality &&
-                typeof quality.channelName === 'string' &&
-                quality.channelName.length > 0
-                    ? quality.channelName
-                    : null,
-            qualityScore:
-                quality
-                    ? quality.qualityScore
-                    : null,
-            generatedAt:
-                quality &&
-                typeof quality.generatedAt === 'string'
-                    ? quality.generatedAt
-                    : null,
-            hasMeta:
-                quality !== null,
-            status:
-                quality === null
-                    ? 'unknown'
-                    : isHighQualityLogo(quality)
-                        ? 'good'
-                        : 'improving',
-        });
+        const quality =
+            hasLogo
+                ? readLogoQuality(metaPath)
+                : null;
+
+        const logo =
+            collectorLogoStatus(stationId);
+
+        const failures =
+            Number(
+                item.consecutiveDetectionFailures || 0
+            );
+
+        const status =
+            collectorStateName(
+                logo.status,
+                failures
+            );
+
+        resultByKey.set(
+            `station:${stationId}`,
+            {
+                stationId,
+                serviceId:
+                    item.serviceId != null
+                        ? String(item.serviceId)
+                        : null,
+                channelName:
+                    typeof item.channelName === 'string' &&
+                    item.channelName.length > 0
+                        ? item.channelName
+                        : quality &&
+                          typeof quality.channelName === 'string' &&
+                          quality.channelName.length > 0
+                            ? quality.channelName
+                            : null,
+                channelType:
+                    typeof item.channelType === 'string' &&
+                    item.channelType.length > 0
+                        ? item.channelType
+                        : null,
+                physicalChannel:
+                    typeof item.physicalChannel === 'string' &&
+                    item.physicalChannel.length > 0
+                        ? item.physicalChannel
+                        : null,
+                hasLogo,
+                qualityScore:
+                    logo.qualityScore,
+                generatedAt:
+                    quality &&
+                    typeof quality.generatedAt === 'string'
+                        ? quality.generatedAt
+                        : null,
+                hasMeta:
+                    quality !== null,
+                status,
+                lastCollectAt:
+                    typeof item.lastCollectAt === 'string' &&
+                    item.lastCollectAt.length > 0
+                        ? item.lastCollectAt
+                        : null,
+                nextCollectAt:
+                    typeof item.nextCollectAt === 'string' &&
+                    item.nextCollectAt.length > 0
+                        ? item.nextCollectAt
+                        : null,
+                consecutiveDetectionFailures:
+                    failures,
+                lastResult:
+                    typeof item.lastResult === 'string' &&
+                    item.lastResult.length > 0
+                        ? item.lastResult
+                        : null,
+            }
+        );
     }
 
-    result.sort(
-        (a, b) =>
-            a.stationId.localeCompare(
-                b.stationId
-            )
-    );
+    /*
+     * Collector stateにまだ存在しないlegacy LGDも残す。
+     * これにより従来の /logos との互換性を維持する。
+     */
+    if (fs.existsSync(LOGO_ROOT)) {
+        for (const name of fs.readdirSync(LOGO_ROOT)) {
+            if (!name.endsWith('.lgd')) {
+                continue;
+            }
+
+            const stationId =
+                name.substring(
+                    0,
+                    name.length - '.lgd'.length
+                );
+
+            if (!/^[A-Za-z0-9_-]+$/.test(stationId)) {
+                continue;
+            }
+
+            const key =
+                `station:${stationId}`;
+
+            if (resultByKey.has(key)) {
+                continue;
+            }
+
+            const logoPath =
+                path.join(
+                    LOGO_ROOT,
+                    name
+                );
+
+            if (!isUsableFile(logoPath)) {
+                continue;
+            }
+
+            const metaPath =
+                path.join(
+                    LOGO_ROOT,
+                    `${stationId}.lgd.meta.json`
+                );
+
+            const quality =
+                readLogoQuality(metaPath);
+
+            resultByKey.set(
+                key,
+                {
+                    stationId,
+                    serviceId: null,
+                    channelName:
+                        quality &&
+                        typeof quality.channelName === 'string' &&
+                        quality.channelName.length > 0
+                            ? quality.channelName
+                            : null,
+                    channelType: null,
+                    physicalChannel: null,
+                    hasLogo: true,
+                    qualityScore:
+                        quality
+                            ? quality.qualityScore
+                            : null,
+                    generatedAt:
+                        quality &&
+                        typeof quality.generatedAt === 'string'
+                            ? quality.generatedAt
+                            : null,
+                    hasMeta:
+                        quality !== null,
+                    status:
+                        quality === null
+                            ? 'unknown'
+                            : isHighQualityLogo(quality)
+                                ? 'good'
+                                : 'improving',
+                    lastCollectAt: null,
+                    nextCollectAt: null,
+                    consecutiveDetectionFailures: 0,
+                    lastResult: null,
+                }
+            );
+        }
+    }
+
+    /*
+     * EPGStationには存在するがChListで解決できないサービス。
+     * stationIdを捏造せずserviceIdを識別子として返す。
+     */
+    for (const [serviceId, item] of Object.entries(state.unsupported || {})) {
+        resultByKey.set(
+            `service:${serviceId}`,
+            {
+                stationId: null,
+                serviceId: String(serviceId),
+                channelName:
+                    typeof item.channelName === 'string' &&
+                    item.channelName.length > 0
+                        ? item.channelName
+                        : null,
+                channelType:
+                    typeof item.channelType === 'string' &&
+                    item.channelType.length > 0
+                        ? item.channelType
+                        : null,
+                physicalChannel:
+                    typeof item.physicalChannel === 'string' &&
+                    item.physicalChannel.length > 0
+                        ? item.physicalChannel
+                        : null,
+                hasLogo: false,
+                qualityScore: null,
+                generatedAt: null,
+                hasMeta: false,
+                status: 'unsupported',
+                lastCollectAt: null,
+                nextCollectAt: null,
+                consecutiveDetectionFailures: 0,
+                lastResult: null,
+            }
+        );
+    }
+
+    const result =
+        [...resultByKey.values()];
+
+    const channelPriority = value => {
+        if (value === 'GR') return 0;
+        if (value === 'BS') return 1;
+        if (value === 'CS') return 2;
+        return 3;
+    };
+
+    result.sort((a, b) => {
+        const ac =
+            channelPriority(a.channelType);
+        const bc =
+            channelPriority(b.channelType);
+
+        if (ac !== bc) {
+            return ac - bc;
+        }
+
+        const an =
+            a.channelName ||
+            a.stationId ||
+            a.serviceId ||
+            '';
+
+        const bn =
+            b.channelName ||
+            b.stationId ||
+            b.serviceId ||
+            '';
+
+        return an.localeCompare(
+            bn,
+            'ja'
+        );
+    });
 
     return result;
 }
@@ -2187,6 +2994,35 @@ const server = http.createServer(
                 }
 
                 fs.unlinkSync(logoPath);
+
+                /*
+                 * 削除直後からCollectorの再取得対象に戻す。
+                 * 次回cycleを待たず /logos の表示もmissingへ同期する。
+                 */
+                const collectorState =
+                    readCollectorState();
+
+                if (
+                    collectorState.stations &&
+                    collectorState.stations[stationId]
+                ) {
+                    const item =
+                        collectorState.stations[stationId];
+
+                    collectorState.stations[stationId] = {
+                        ...item,
+                        status: 'missing',
+                        logoStatus: 'missing',
+                        qualityScore: null,
+                        nextCollectAt: null,
+                        consecutiveDetectionFailures: 0,
+                        lastResult: 'logo-deleted',
+                    };
+
+                    writeCollectorState(
+                        collectorState
+                    );
+                }
 
                 log(
                     'logo deleted',
@@ -2516,5 +3352,7 @@ server.listen(
         log(
             `cm-analyzer listening on ${PORT}`
         );
+
+        scheduleLogoCollector();
     }
 );

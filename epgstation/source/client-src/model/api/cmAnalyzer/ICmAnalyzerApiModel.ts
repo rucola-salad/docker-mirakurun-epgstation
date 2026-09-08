@@ -1,15 +1,27 @@
 export type CmAnalyzerLogoStatus =
     'unknown' |
+    'missing' |
+    'improving' |
     'good' |
-    'improving';
+    'backoff' |
+    'suspended' |
+    'unsupported';
 
 export interface ICmAnalyzerLogo {
-    stationId: string;
+    stationId: string | null;
+    serviceId: string | null;
     channelName: string | null;
+    channelType: string | null;
+    physicalChannel: string | null;
+    hasLogo: boolean;
     qualityScore: number | null;
     generatedAt: string | null;
     hasMeta: boolean;
     status: CmAnalyzerLogoStatus;
+    lastCollectAt: string | null;
+    nextCollectAt: string | null;
+    consecutiveDetectionFailures: number;
+    lastResult: string | null;
 }
 
 export interface ICmAnalyzerChapter {
