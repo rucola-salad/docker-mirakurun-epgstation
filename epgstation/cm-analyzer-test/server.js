@@ -2093,8 +2093,8 @@ async function runLogoCollectorOnce(worker) {
 
     try {
         fs.mkdirSync(LOGO_COLLECT_TMP_ROOT, { recursive: true });
-        const state = readCollectorState();
         const channels = await loadEpgstationChannels();
+        const state = readCollectorState();
 
         updateUnsupportedCollectorState(
             channels,
