@@ -1,0 +1,86 @@
+diff --git a/src/command/join_logo_frame.js b/src/command/join_logo_frame.js
+index ed1bb44..d486577 100644
+--- a/src/command/join_logo_frame.js
++++ b/src/command/join_logo_frame.js
+@@ -10,10 +10,13 @@ const {
+   OUTPUT_AVS_CUT
+ } = require("../settings");
+ 
+-exports.exec = param => {
++exports.exec = (param, noLogo = false) => {
+   return new Promise((resolve)=>{
+-    let args = [ "-inlogo",
+-      LOGOFRAME_TXT_OUTPUT,
++    let args = [];
++    if (!noLogo) {
++      args.push("-inlogo", LOGOFRAME_TXT_OUTPUT);
++    }
++    args = args.concat([
+       "-inscp",
+       CHAPTEREXE_OUTPUT,
+       "-incmd",
+@@ -24,7 +27,7 @@ exports.exec = param => {
+       JLSCP_OUTPUT,
+       "-flags",
+       param.JL_FLAGS
+-    ];
++    ]);
+ 
+     if (param.JLOGO_OPT1 && param.JLOGO_OPT1 !== "") {
+       args = args.concat(param.JLOGO_OPT1.split(" "));
+diff --git a/src/jlse.js b/src/jlse.js
+index 81d5b57..ad5823a 100755
+--- a/src/jlse.js
++++ b/src/jlse.js
+@@ -20,6 +20,11 @@ const argv = require("yargs")
+     default: false,
+     describe: "enable to ffmpeg encode"
+   })
++  .option("nologo", {
++    type: "boolean",
++    default: false,
++    describe: "run chapter analysis without logo data"
++  })
+   .option("target", {
+     alias: "t",
+     choices: ["cutcm", "cutcm_logo"],
+@@ -117,10 +122,12 @@ const main = async () => {
+   };
+ 
+   await chapterexe(avsFile);
+-  await logoframe(param, channel, avsFile);
+-  await joinlogoframe(param);
++  if (!argv.nologo) {
++    await logoframe(param, channel, avsFile);
++  }
++  await joinlogoframe(param, argv.nologo);
+ 
+-  await createOutAvs(avsFile);
++  await createOutAvs(avsFile, argv.nologo);
+   await createChapter(settings);
+ 
+   if(argv.filter) {createFilter(inputFile, OUTPUT_AVS_CUT, OUTPUT_FILTER_CUT); }
+diff --git a/src/output/avs.js b/src/output/avs.js
+index be66857..0520b00 100644
+--- a/src/output/avs.js
++++ b/src/output/avs.js
+@@ -20,7 +20,7 @@ const createfile = (inputfiles, outputfile) =>{
+   });
+ };
+ 
+-exports.create = async (inputFile) => {
++exports.create = async (inputFile, noLogo = false) => {
+   const { OUTPUT_AVS_CUT, 
+           LOGOFRAME_AVS_OUTPUT, 
+           OUTPUT_AVS_IN_CUT,
+@@ -28,7 +28,9 @@ exports.create = async (inputFile) => {
+         } = require("../settings");
+   try {
+     await createfile([inputFile, OUTPUT_AVS_CUT], OUTPUT_AVS_IN_CUT);
+-    await createfile([inputFile, LOGOFRAME_AVS_OUTPUT, OUTPUT_AVS_CUT], OUTPUT_AVS_IN_CUT_LOGO);
++    if (!noLogo) {
++      await createfile([inputFile, LOGOFRAME_AVS_OUTPUT, OUTPUT_AVS_CUT], OUTPUT_AVS_IN_CUT_LOGO);
++    }
+   } catch (e) {
+     console.error(e);
+     process.exit(-1);

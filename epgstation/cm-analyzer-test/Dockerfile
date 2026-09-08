@@ -16,13 +16,20 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY patches/jlse-avsync-false.patch /tmp/jlse-avsync-false.patch
+COPY patches/jlse-nologo.patch /tmp/jlse-nologo.patch
+COPY patches/jlse-audio-auto.patch /tmp/jlse-audio-auto.patch
 
 RUN cd /tmp && \
     git clone --recursive https://github.com/tobitti0/JoinLogoScpTrialSetLinux.git && \
     cd JoinLogoScpTrialSetLinux && \
     git apply --check /tmp/jlse-avsync-false.patch && \
     git apply /tmp/jlse-avsync-false.patch && \
+    git -C modules/join_logo_scp_trial apply --check /tmp/jlse-nologo.patch && \
+    git -C modules/join_logo_scp_trial apply /tmp/jlse-nologo.patch && \
+    git apply --check /tmp/jlse-audio-auto.patch && \
+    git apply /tmp/jlse-audio-auto.patch && \
     grep -n "LWLibavAudioSource" modules/join_logo_scp_trial/src/jlse.js && \
+    grep -n "nologo" modules/join_logo_scp_trial/src/jlse.js && \
     cd modules/chapter_exe/src && \
     make && \
     mv chapter_exe ../../join_logo_scp_trial/bin/ && \

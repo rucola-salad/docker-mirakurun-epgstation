@@ -1,0 +1,13 @@
+diff --git a/modules/join_logo_scp_trial/src/jlse.js b/modules/join_logo_scp_trial/src/jlse.js
+index 81d5b57..3227a83 100755
+--- a/modules/join_logo_scp_trial/src/jlse.js
++++ b/modules/join_logo_scp_trial/src/jlse.js
+@@ -108,7 +108,7 @@ const main = async () => {
+         } = settings;
+   const channel = parseChannel(inputFile);
+   const param = parseParam(channel, inputFileName);
+-  let avsFile = createAvs(INPUT_AVS, inputFile, 1);
++  let avsFile = createAvs(INPUT_AVS, inputFile, -1);
+   if(param.use_tssplit == 1){
+     console.log("TS spliting ...");
+     tsdivider(inputFile);

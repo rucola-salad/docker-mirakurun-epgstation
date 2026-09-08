@@ -661,10 +661,27 @@ function readLogoQuality(metaPath) {
     }
 }
 
+const LOGO_ANALYSIS_MIN_QUALITY = 70;
+
 function isHighQualityLogo(quality) {
     return (
         quality &&
         quality.qualityScore >= 90
+    );
+}
+
+function isLogoUsableForAnalysis(quality) {
+    /*
+     * metaのない既存LGDは従来互換のため利用する。
+     * 品質評価済みLGDは70点以上だけCM解析に利用する。
+     */
+    return (
+        quality === null ||
+        (
+            typeof quality.qualityScore === 'number' &&
+            quality.qualityScore >=
+                LOGO_ANALYSIS_MIN_QUALITY
+        )
     );
 }
 
@@ -907,17 +924,40 @@ async function prepareLogoForStation(
          * 既存LGDがあればそれを維持する。
          */
         if (existingLogo && !throwOnGenerationFailure) {
+            if (
+                isLogoUsableForAnalysis(
+                    existingQuality
+                )
+            ) {
+                log(
+                    'logo generation failed; using existing logo',
+                    `station=${stationId}`,
+                    existingQuality
+                        ? `quality=${existingQuality.qualityScore.toFixed(2)}`
+                        : 'quality=unknown',
+                    err
+                );
+
+                return {
+                    stationId,
+                    logoPath,
+                    logoGenerated: false,
+                };
+            }
+
             log(
-                'logo generation failed; using existing logo',
+                'logo generation failed; existing logo quality too low for analysis',
                 `station=${stationId}`,
+                `quality=${existingQuality.qualityScore.toFixed(2)}`,
+                `minimum=${LOGO_ANALYSIS_MIN_QUALITY}`,
                 err
             );
 
-            return {
-                stationId,
-                logoPath,
-                logoGenerated: false,
-            };
+            throw new Error(
+                `usable station logo is unavailable: ${logoPath} ` +
+                `(quality=${existingQuality.qualityScore.toFixed(2)}, ` +
+                `minimum=${LOGO_ANALYSIS_MIN_QUALITY})`
+            );
         }
 
         throw err;
@@ -931,6 +971,22 @@ async function prepareLogoForStation(
 
     const finalQuality =
         readLogoQuality(metaPath);
+
+    if (!isLogoUsableForAnalysis(finalQuality)) {
+        log(
+            'station logo quality too low for analysis',
+            `station=${stationId}`,
+            `quality=${finalQuality.qualityScore.toFixed(2)}`,
+            `minimum=${LOGO_ANALYSIS_MIN_QUALITY}`,
+            `path=${logoPath}`
+        );
+
+        throw new Error(
+            `usable station logo is unavailable: ${logoPath} ` +
+            `(quality=${finalQuality.qualityScore.toFixed(2)}, ` +
+            `minimum=${LOGO_ANALYSIS_MIN_QUALITY})`
+        );
+    }
 
     log(
         'logo preparation finished',
@@ -1474,12 +1530,50 @@ async function runAnalysis(job) {
             workInput
         );
 
-        const logo =
-            await prepareLogo(
-                workInput,
-                job.channelName,
-                String(job.recordedId)
+        let logo;
+        let noLogo = false;
+
+        try {
+            logo =
+                await prepareLogo(
+                    workInput,
+                    job.channelName,
+                    String(job.recordedId)
+                );
+        } catch (err) {
+            const message =
+                err && err.message
+                    ? String(err.message)
+                    : String(err);
+
+            if (
+                !message.startsWith(
+                    'usable station logo is unavailable:'
+                )
+            ) {
+                throw err;
+            }
+
+            const channel =
+                parseChannel(workInput);
+
+            if (!channel || !channel.short) {
+                throw err;
+            }
+
+            noLogo = true;
+            logo = {
+                stationId: String(channel.short),
+                logoPath: null,
+                logoGenerated: false,
+            };
+
+            log(
+                'station logo unavailable; using no-logo analysis',
+                `station=${logo.stationId}`,
+                `recordedId=${job.recordedId}`
             );
+        }
 
         currentJob = {
             ...job,
@@ -1503,12 +1597,24 @@ async function runAnalysis(job) {
             })
         );
 
+        const jlseArgs = [
+            '-i',
+            workInput,
+        ];
+
+        if (noLogo) {
+            jlseArgs.push('--nologo');
+        }
+
+        log(
+            'jlse start',
+            `recordedId=${job.recordedId}`,
+            `noLogo=${noLogo}`
+        );
+
         await spawnAndWait(
             '/usr/local/bin/jlse',
-            [
-                '-i',
-                workInput,
-            ],
+            jlseArgs,
             {
                 cwd: JLSE_ROOT,
                 stdio: [
