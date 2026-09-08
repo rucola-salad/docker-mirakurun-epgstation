@@ -1705,6 +1705,41 @@ async function loadEpgstationChannels() {
     return value;
 }
 
+async function loadEpgstationBroadcastingSchedules() {
+    const body = await collectorHttpGetBuffer(
+        `${EPGSTATION_URL}/api/schedules/broadcasting?isHalfWidth=false`
+    );
+    const value = JSON.parse(body.toString('utf8'));
+    if (!Array.isArray(value)) {
+        throw new Error('EPGStation broadcasting response is not an array');
+    }
+    return value;
+}
+
+function buildCollectorProgramIndex(schedules) {
+    const index = new Map();
+
+    for (const schedule of schedules) {
+        const channelId = Number(schedule && schedule.channel && schedule.channel.id);
+        const program = Array.isArray(schedule && schedule.programs)
+            ? schedule.programs[0]
+            : null;
+
+        if (!Number.isFinite(channelId) || !program) {
+            continue;
+        }
+
+        index.set(channelId, program);
+    }
+
+    return index;
+}
+
+function isCollectorAnimeProgram(program) {
+    return [program && program.genre1, program && program.genre2, program && program.genre3]
+        .some(genre => Number(genre) === 7);
+}
+
 function normalizeCollectorChannelName(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
 }
@@ -1892,7 +1927,7 @@ function pruneCollectorStationState(stations, state) {
     }
 }
 
-function selectCollectorTarget(stations, state, worker) {
+function selectCollectorTarget(stations, state, worker, programIndex) {
     const now = Date.now();
     const candidates = [];
     for (const station of stations) {
@@ -1904,6 +1939,22 @@ function selectCollectorTarget(stations, state, worker) {
         if (!matchesWorker) {
             continue;
         }
+        const program = programIndex.get(Number(station.serviceId));
+        const programEndAt = Number(program && program.endAt);
+        const remainingMs = Number.isFinite(programEndAt)
+            ? programEndAt - now
+            : 0;
+        const minimumRemainingMs =
+            (LOGO_COLLECT_SAMPLE_SECONDS + 60) * 1000;
+
+        // Avoid sampling across a program boundary. A stable single-program
+        // sample is preferable for logo generation.
+        if (!program || remainingMs < minimumRemainingMs) {
+            continue;
+        }
+
+        const animeReady = isCollectorAnimeProgram(program);
+
         const logo = collectorLogoStatus(station.stationId);
         const prev = state.stations[station.stationId] || {};
         const failures = Number(prev.consecutiveDetectionFailures || 0);
@@ -1923,6 +1974,9 @@ function selectCollectorTarget(stations, state, worker) {
                 logoStatus: logo.status,
                 qualityScore: logo.qualityScore,
                 failures,
+                animeReady,
+                programName: program.name || '',
+                programEndAt,
                 lastCollectAt: prev.lastCollectAt || '',
             });
         }
@@ -1941,6 +1995,10 @@ function selectCollectorTarget(stations, state, worker) {
         const as = statusPriority(a.logoStatus);
         const bs = statusPriority(b.logoStatus);
         if (as !== bs) return as - bs;
+
+        if (a.animeReady !== b.animeReady) {
+            return a.animeReady ? -1 : 1;
+        }
 
         const ac = channelPriority(a.channelType);
         const bc = channelPriority(b.channelType);
@@ -2093,8 +2151,13 @@ async function runLogoCollectorOnce(worker) {
 
     try {
         fs.mkdirSync(LOGO_COLLECT_TMP_ROOT, { recursive: true });
-        const channels = await loadEpgstationChannels();
+        const [channels, broadcastingSchedules] = await Promise.all([
+            loadEpgstationChannels(),
+            loadEpgstationBroadcastingSchedules(),
+        ]);
         const state = readCollectorState();
+        const programIndex =
+            buildCollectorProgramIndex(broadcastingSchedules);
 
         updateUnsupportedCollectorState(
             channels,
@@ -2108,7 +2171,12 @@ async function runLogoCollectorOnce(worker) {
             state
         );
 
-        const target = selectCollectorTarget(stations, state, worker);
+        const target = selectCollectorTarget(
+            stations,
+            state,
+            worker,
+            programIndex
+        );
         writeCollectorState(state);
         if (!target) return;
 
@@ -2122,6 +2190,8 @@ async function runLogoCollectorOnce(worker) {
             `station=${target.stationId}`,
             `channel=${target.channelName}`,
             `serviceId=${target.serviceId}`,
+            `program=${target.programName}`,
+            `anime=${target.animeReady}`,
             `priority=${LOGO_COLLECT_PRIORITY}`,
             `seconds=${LOGO_COLLECT_SAMPLE_SECONDS}`);
 
