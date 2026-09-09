@@ -335,66 +335,197 @@
 
                         <v-list-item>
                             <v-list-item-content>
-                                <div class="title mb-3">CM解析ロゴ管理</div>
+                                <div class="title mb-2">CM解析ロゴ管理</div>
 
-                                <v-progress-linear v-if="isLoadingCmAnalyzerLogos" indeterminate></v-progress-linear>
+                                <v-progress-linear
+                                    v-if="isLoadingCmAnalyzerLogoCollectorStatus"
+                                    indeterminate
+                                    class="mb-2"
+                                ></v-progress-linear>
 
-                                <div v-else-if="cmAnalyzerLogos.length === 0" class="text--secondary">CM解析ロゴはありません</div>
+                                <div v-if="cmAnalyzerLogoCollectorStatus !== null" class="cm-logo-collector mb-3">
+                                    <div class="d-flex align-center">
+                                        <div class="font-weight-bold">
+                                            ロゴ自動取得
+                                        </div>
 
-                                <v-card v-for="logo in cmAnalyzerLogos" :key="getCmAnalyzerLogoKey(logo)" outlined class="mb-3">
-                                    <v-card-text>
-                                        <div class="d-flex flex-wrap align-center">
-                                            <div class="cm-logo-station">
-                                                <div class="subtitle-1 font-weight-bold">
-                                                    {{ logo.channelName || logo.stationId || logo.serviceId || '不明なチャンネル' }}
+                                        <v-chip
+                                            x-small
+                                            class="ml-2"
+                                            :color="cmAnalyzerLogoCollectorStatus.enabled ? 'success' : undefined"
+                                        >
+                                            {{ cmAnalyzerLogoCollectorStatus.enabled ? 'ON' : 'OFF' }}
+                                        </v-chip>
+
+                                        <v-spacer></v-spacer>
+
+                                        <v-btn
+                                            small
+                                            text
+                                            :color="cmAnalyzerLogoCollectorStatus.enabled ? 'error' : 'primary'"
+                                            :loading="isUpdatingCmAnalyzerLogoCollector"
+                                            v-on:click="toggleCmAnalyzerLogoCollector"
+                                        >
+                                            {{ cmAnalyzerLogoCollectorStatus.enabled ? '停止' : '開始' }}
+                                        </v-btn>
+                                    </div>
+
+                                    <div
+                                        v-for="worker in cmAnalyzerLogoCollectorWorkers"
+                                        :key="worker.name"
+                                        class="cm-logo-worker"
+                                    >
+                                        <span class="font-weight-bold cm-logo-worker-name">
+                                            {{ worker.name }}
+                                        </span>
+
+                                        <span>
+                                            {{ getCmAnalyzerLogoCollectorWorkerText(worker.status) }}
+                                        </span>
+
+                                        <span
+                                            v-if="worker.status.channelName"
+                                            class="text--secondary ml-2"
+                                        >
+                                            {{ worker.status.channelName }}
+                                        </span>
+
+                                        <span
+                                            v-if="worker.status.programName"
+                                            class="text--secondary ml-2 cm-logo-worker-program"
+                                        >
+                                            {{ worker.status.programName }}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div
+                                    v-else-if="!isLoadingCmAnalyzerLogoCollectorStatus"
+                                    class="caption text--secondary mb-3"
+                                >
+                                    ロゴ自動取得状態を取得できませんでした
+                                </div>
+
+                                <v-progress-linear
+                                    v-if="isLoadingCmAnalyzerLogos"
+                                    indeterminate
+                                    class="mb-2"
+                                ></v-progress-linear>
+
+                                <div v-else>
+                                    <div class="d-flex flex-wrap align-center cm-logo-summary">
+                                        <span>登録 {{ cmAnalyzerLogoRegisteredCount }}</span>
+                                        <span class="ml-3">未取得 {{ cmAnalyzerLogoMissingCount }}</span>
+                                        <span class="ml-3">改善中 {{ cmAnalyzerLogoImprovingCount }}</span>
+
+                                        <v-spacer></v-spacer>
+
+                                        <v-btn
+                                            v-if="cmAnalyzerLogos.length > 0"
+                                            small
+                                            text
+                                            color="primary"
+                                            v-on:click="isCmAnalyzerLogoListOpen = !isCmAnalyzerLogoListOpen"
+                                        >
+                                            {{ isCmAnalyzerLogoListOpen ? 'ロゴ一覧を閉じる' : 'ロゴ一覧を開く' }}
+                                            <v-icon small right>
+                                                {{ isCmAnalyzerLogoListOpen ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+                                            </v-icon>
+                                        </v-btn>
+                                    </div>
+
+                                    <div
+                                        v-if="cmAnalyzerLogos.length === 0"
+                                        class="text--secondary mt-2"
+                                    >
+                                        CM解析ロゴはありません
+                                    </div>
+
+                                    <div
+                                        v-if="isCmAnalyzerLogoListOpen"
+                                        class="cm-logo-list mt-2"
+                                    >
+                                        <v-card
+                                            v-for="logo in cmAnalyzerLogos"
+                                            :key="getCmAnalyzerLogoKey(logo)"
+                                            outlined
+                                            class="cm-logo-row mb-1"
+                                        >
+                                            <div class="d-flex flex-wrap align-center px-3 py-2">
+                                                <div class="cm-logo-row-main">
+                                                    <span class="font-weight-bold">
+                                                        {{ logo.channelName || logo.stationId || logo.serviceId || '不明なチャンネル' }}
+                                                    </span>
+
+                                                    <span class="caption text--secondary ml-2">
+                                                        {{ getCmAnalyzerLogoIdentifier(logo) }}
+                                                    </span>
                                                 </div>
-                                                <div class="caption">
-                                                    {{ getCmAnalyzerLogoIdentifier(logo) }}
+
+                                                <div class="cm-logo-row-status">
+                                                    {{ getCmAnalyzerLogoStatus(logo) }}
                                                 </div>
-                                                <div class="caption">状態: {{ getCmAnalyzerLogoStatus(logo) }}</div>
-                                            </div>
 
-                                            <div v-if="logo.stationId && logo.hasLogo !== false" class="cm-logo-preview mx-4">
-                                                <img :src="getCmAnalyzerLogoPreviewUrl(logo)" :alt="logo.stationId + ' logo'" />
-                                            </div>
-
-                                            <div class="cm-logo-info">
-                                                <div>
-                                                    品質:
+                                                <div class="cm-logo-row-quality">
                                                     {{ getCmAnalyzerLogoQuality(logo) }}
                                                 </div>
-                                                <div>
-                                                    生成日時:
-                                                    {{ getCmAnalyzerLogoGeneratedAt(logo) }}
+
+                                                <v-spacer></v-spacer>
+
+                                                <v-btn
+                                                    small
+                                                    text
+                                                    v-on:click="toggleCmAnalyzerLogoDetail(logo)"
+                                                >
+                                                    {{ isCmAnalyzerLogoDetailOpen(logo) ? '閉じる' : '詳細' }}
+                                                </v-btn>
+
+                                                <v-btn
+                                                    v-if="logo.stationId && logo.hasLogo !== false"
+                                                    small
+                                                    text
+                                                    color="error"
+                                                    :disabled="isDeletingCmAnalyzerLogo"
+                                                    v-on:click="openCmAnalyzerLogoDeleteDialog(logo)"
+                                                >
+                                                    削除
+                                                </v-btn>
+                                            </div>
+
+                                            <div
+                                                v-if="isCmAnalyzerLogoDetailOpen(logo)"
+                                                class="cm-logo-detail px-3 pb-3"
+                                            >
+                                                <div
+                                                    v-if="logo.stationId && logo.hasLogo !== false"
+                                                    class="cm-logo-preview mb-2"
+                                                >
+                                                    <img
+                                                        :src="getCmAnalyzerLogoPreviewUrl(logo)"
+                                                        :alt="logo.stationId + ' logo'"
+                                                    />
                                                 </div>
-                                                <div>
-                                                    最終取得:
-                                                    {{ getCmAnalyzerLogoLastCollectAt(logo) }}
+
+                                                <div class="caption">
+                                                    生成日時: {{ getCmAnalyzerLogoGeneratedAt(logo) }}
                                                 </div>
-                                                <div>
-                                                    次回取得:
-                                                    {{ getCmAnalyzerLogoNextCollectAt(logo) }}
+                                                <div class="caption">
+                                                    最終取得: {{ getCmAnalyzerLogoLastCollectAt(logo) }}
                                                 </div>
-                                                <div v-if="logo.consecutiveDetectionFailures > 0">
+                                                <div class="caption">
+                                                    次回取得: {{ getCmAnalyzerLogoNextCollectAt(logo) }}
+                                                </div>
+                                                <div
+                                                    v-if="logo.consecutiveDetectionFailures > 0"
+                                                    class="caption"
+                                                >
                                                     連続検出失敗:
                                                     {{ logo.consecutiveDetectionFailures }} 回
                                                 </div>
                                             </div>
-
-                                            <v-spacer></v-spacer>
-
-                                            <v-btn
-                                                v-if="logo.stationId && logo.hasLogo !== false"
-                                                text
-                                                color="error"
-                                                :disabled="isDeletingCmAnalyzerLogo"
-                                                v-on:click="openCmAnalyzerLogoDeleteDialog(logo)"
-                                            >
-                                                削除
-                                            </v-btn>
-                                        </div>
-                                    </v-card-text>
-                                </v-card>
+                                        </v-card>
+                                    </div>
+                                </div>
                             </v-list-item-content>
                         </v-list-item>
 
@@ -450,7 +581,11 @@
 import TitleBar from '@/components/titleBar/TitleBar.vue';
 import * as apid from '../../../api';
 import IExtensionSettingsApiModel from '@/model/api/extensionSettings/IExtensionSettingsApiModel';
-import ICmAnalyzerApiModel, { ICmAnalyzerLogo } from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
+import ICmAnalyzerApiModel, {
+    ICmAnalyzerLogo,
+    ICmAnalyzerLogoCollectorStatus,
+    ICmAnalyzerLogoCollectorWorkerStatus,
+} from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
 import container from '@/model/ModelContainer';
 import IScrollPositionState from '@/model/state/IScrollPositionState';
 import INavigationState from '@/model/state/navigation/INavigationState';
@@ -489,6 +624,14 @@ export default class Settings extends Vue {
     public isCmAnalyzerLogoDeleteDialogOpen: boolean = false;
     public cmAnalyzerLogoDeleteTarget: ICmAnalyzerLogo | null = null;
     public isDeletingCmAnalyzerLogo: boolean = false;
+    public isCmAnalyzerLogoListOpen: boolean = false;
+    public cmAnalyzerLogoDetailKeys: string[] = [];
+
+    public cmAnalyzerLogoCollectorStatus: ICmAnalyzerLogoCollectorStatus | null = null;
+    public isLoadingCmAnalyzerLogoCollectorStatus: boolean = false;
+    public isUpdatingCmAnalyzerLogoCollector: boolean = false;
+
+    private cmAnalyzerLogoCollectorStatusTimer: number | null = null;
 
     private extensionSettingsApi = container.get<IExtensionSettingsApiModel>('IExtensionSettingsApiModel');
     private cmAnalyzerApi = container.get<ICmAnalyzerApiModel>('ICmAnalyzerApiModel');
@@ -573,6 +716,130 @@ export default class Settings extends Vue {
             };
             this.searchLengthItems.push(item);
         }
+    }
+
+    get cmAnalyzerLogoRegisteredCount(): number {
+        return this.cmAnalyzerLogos.filter(logo => logo.hasLogo !== false).length;
+    }
+
+    get cmAnalyzerLogoMissingCount(): number {
+        return this.cmAnalyzerLogos.filter(logo => logo.status === 'missing').length;
+    }
+
+    get cmAnalyzerLogoImprovingCount(): number {
+        return this.cmAnalyzerLogos.filter(logo => logo.status === 'improving').length;
+    }
+
+    get cmAnalyzerLogoCollectorWorkers(): Array<{
+        name: string;
+        status: ICmAnalyzerLogoCollectorWorkerStatus;
+    }> {
+        if (this.cmAnalyzerLogoCollectorStatus === null) {
+            return [];
+        }
+
+        return [
+            {
+                name: 'GR',
+                status: this.cmAnalyzerLogoCollectorStatus.workers.GR,
+            },
+            {
+                name: 'BS/CS',
+                status: this.cmAnalyzerLogoCollectorStatus.workers.BSCS,
+            },
+        ];
+    }
+
+    public getCmAnalyzerLogoCollectorWorkerText(
+        worker: ICmAnalyzerLogoCollectorWorkerStatus,
+    ): string {
+        if (
+            this.cmAnalyzerLogoCollectorStatus !== null &&
+            !this.cmAnalyzerLogoCollectorStatus.enabled &&
+            worker.running
+        ) {
+            return `停止待ち / ${this.getCmAnalyzerLogoCollectorPhaseText(worker.phase)}`;
+        }
+
+        if (
+            this.cmAnalyzerLogoCollectorStatus !== null &&
+            !this.cmAnalyzerLogoCollectorStatus.enabled &&
+            !worker.running
+        ) {
+            return '停止';
+        }
+
+        return this.getCmAnalyzerLogoCollectorPhaseText(worker.phase);
+    }
+
+    public getCmAnalyzerLogoCollectorPhaseText(phase: string): string {
+        switch (phase) {
+            case 'selecting':
+                return '対象選択中';
+            case 'sampling':
+                return 'サンプル取得中';
+            case 'probing':
+                return 'サンプル確認中';
+            case 'analyzing':
+                return 'ロゴ解析中';
+            case 'idle':
+            default:
+                return '待機中';
+        }
+    }
+
+    public async toggleCmAnalyzerLogoCollector(): Promise<void> {
+        if (
+            this.cmAnalyzerLogoCollectorStatus === null ||
+            this.isUpdatingCmAnalyzerLogoCollector
+        ) {
+            return;
+        }
+
+        const enable = !this.cmAnalyzerLogoCollectorStatus.enabled;
+        this.isUpdatingCmAnalyzerLogoCollector = true;
+
+        try {
+            this.cmAnalyzerLogoCollectorStatus = enable
+                ? await this.cmAnalyzerApi.startLogoCollector()
+                : await this.cmAnalyzerApi.stopLogoCollector();
+
+            this.snackbarState.open({
+                text: enable
+                    ? 'CM解析ロゴ自動取得を開始しました'
+                    : 'CM解析ロゴ自動取得を停止しました',
+                color: 'success',
+            });
+        } catch (err) {
+            this.snackbarState.open({
+                text: enable
+                    ? 'CM解析ロゴ自動取得の開始に失敗しました'
+                    : 'CM解析ロゴ自動取得の停止に失敗しました',
+                color: 'error',
+            });
+
+            console.error(err);
+        } finally {
+            this.isUpdatingCmAnalyzerLogoCollector = false;
+        }
+    }
+
+    public toggleCmAnalyzerLogoDetail(logo: ICmAnalyzerLogo): void {
+        const key = this.getCmAnalyzerLogoKey(logo);
+        const index = this.cmAnalyzerLogoDetailKeys.indexOf(key);
+
+        if (index >= 0) {
+            this.cmAnalyzerLogoDetailKeys.splice(index, 1);
+            return;
+        }
+
+        this.cmAnalyzerLogoDetailKeys.push(key);
+    }
+
+    public isCmAnalyzerLogoDetailOpen(logo: ICmAnalyzerLogo): boolean {
+        return this.cmAnalyzerLogoDetailKeys.indexOf(
+            this.getCmAnalyzerLogoKey(logo),
+        ) >= 0;
     }
 
     public getCmAnalyzerLogoKey(logo: ICmAnalyzerLogo): string {
@@ -705,6 +972,53 @@ export default class Settings extends Vue {
         }
     }
 
+    private async loadCmAnalyzerLogoCollectorStatus(
+        silent: boolean = false,
+    ): Promise<void> {
+        if (
+            this.isLoadingCmAnalyzerLogoCollectorStatus ||
+            this.isUpdatingCmAnalyzerLogoCollector
+        ) {
+            return;
+        }
+
+        if (!silent) {
+            this.isLoadingCmAnalyzerLogoCollectorStatus = true;
+        }
+
+        try {
+            this.cmAnalyzerLogoCollectorStatus =
+                await this.cmAnalyzerApi.getLogoCollectorStatus();
+        } catch (err) {
+            if (!silent) {
+                this.cmAnalyzerLogoCollectorStatus = null;
+            }
+
+            console.error(err);
+        } finally {
+            if (!silent) {
+                this.isLoadingCmAnalyzerLogoCollectorStatus = false;
+            }
+        }
+    }
+
+    private startCmAnalyzerLogoCollectorStatusPolling(): void {
+        this.stopCmAnalyzerLogoCollectorStatusPolling();
+
+        this.cmAnalyzerLogoCollectorStatusTimer = window.setInterval(() => {
+            this.loadCmAnalyzerLogoCollectorStatus(true);
+        }, 3000);
+    }
+
+    private stopCmAnalyzerLogoCollectorStatusPolling(): void {
+        if (this.cmAnalyzerLogoCollectorStatusTimer === null) {
+            return;
+        }
+
+        window.clearInterval(this.cmAnalyzerLogoCollectorStatusTimer);
+        this.cmAnalyzerLogoCollectorStatusTimer = null;
+    }
+
     private async loadCmAnalyzerLogos(): Promise<void> {
         this.isLoadingCmAnalyzerLogos = true;
 
@@ -723,6 +1037,7 @@ export default class Settings extends Vue {
     }
 
     public beforeDestroy(): void {
+        this.stopCmAnalyzerLogoCollectorStatusPolling();
         this.isShow = false;
     }
 
@@ -776,7 +1091,12 @@ export default class Settings extends Vue {
                 });
             }
 
-            await this.loadCmAnalyzerLogos();
+            await Promise.all([
+                this.loadCmAnalyzerLogos(),
+                this.loadCmAnalyzerLogoCollectorStatus(),
+            ]);
+
+            this.startCmAnalyzerLogoCollectorStatusPolling();
 
             this.isShow = true;
 
@@ -794,17 +1114,45 @@ export default class Settings extends Vue {
     max-width: 100px
 .guide-time
     max-width: 70px
-.cm-logo-station
-    min-width: 80px
+.cm-logo-collector
+    border: 1px solid rgba(127, 127, 127, 0.35)
+    border-radius: 4px
+    padding: 8px 12px
+.cm-logo-worker
+    display: flex
+    flex-wrap: wrap
+    align-items: baseline
+    line-height: 1.6
+.cm-logo-worker-name
+    display: inline-block
+    min-width: 52px
+.cm-logo-worker-program
+    overflow: hidden
+    text-overflow: ellipsis
+    white-space: nowrap
+    max-width: 520px
+.cm-logo-summary
+    min-height: 32px
+.cm-logo-list
+    width: 100%
+.cm-logo-row-main
+    min-width: 220px
+    flex: 1 1 320px
+.cm-logo-row-status
+    min-width: 70px
+    margin-left: 12px
+.cm-logo-row-quality
+    min-width: 90px
+    margin-left: 12px
+.cm-logo-detail
+    border-top: 1px solid rgba(127, 127, 127, 0.25)
+    padding-top: 8px
 .cm-logo-preview
-    min-width: 180px
-    text-align: center
+    text-align: left
 .cm-logo-preview img
     max-width: 180px
     max-height: 70px
     image-rendering: auto
-.cm-logo-info
-    min-width: 220px
 </style>
 
 <style lang="sass">

@@ -37,6 +37,10 @@ const MIRAKURUN_URL =
     process.env.MIRAKURUN_URL || 'http://mirakurun:40772';
 const LOGO_COLLECT_ENABLED =
     String(process.env.LOGO_COLLECT_ENABLED || 'false').toLowerCase() === 'true';
+
+// Runtime state. This is intentionally not persisted.
+// CM Analyzer restart always resets this value from LOGO_COLLECT_ENABLED.
+let logoCollectorEnabled = LOGO_COLLECT_ENABLED;
 const LOGO_COLLECT_TMP_ROOT =
     process.env.LOGO_COLLECT_TMP_ROOT || '/logo-collector-tmp';
 const LOGO_COLLECT_INTERVAL_MINUTES =
@@ -2408,9 +2412,68 @@ const logoCollectorRunning = {
     BSCS: false,
 };
 
+const logoCollectorWorkerStatus = {
+    GR: {
+        phase: 'idle',
+        stationId: null,
+        channelName: null,
+        programName: null,
+    },
+    BSCS: {
+        phase: 'idle',
+        stationId: null,
+        channelName: null,
+        programName: null,
+    },
+};
+
+function setLogoCollectorWorkerStatus(worker, phase, target = null) {
+    if (!Object.prototype.hasOwnProperty.call(
+        logoCollectorWorkerStatus,
+        worker
+    )) {
+        return;
+    }
+
+    logoCollectorWorkerStatus[worker] = {
+        phase,
+        stationId:
+            target && typeof target.stationId !== 'undefined'
+                ? String(target.stationId)
+                : null,
+        channelName:
+            target && target.channelName
+                ? String(target.channelName)
+                : null,
+        programName:
+            target && target.programName
+                ? String(target.programName)
+                : null,
+    };
+}
+
+function getLogoCollectorRuntimeStatus() {
+    const workerStatus = worker => ({
+        running: logoCollectorRunning[worker],
+        phase: logoCollectorWorkerStatus[worker].phase,
+        stationId: logoCollectorWorkerStatus[worker].stationId,
+        channelName: logoCollectorWorkerStatus[worker].channelName,
+        programName: logoCollectorWorkerStatus[worker].programName,
+    });
+
+    return {
+        enabled: logoCollectorEnabled,
+        startupEnabled: LOGO_COLLECT_ENABLED,
+        workers: {
+            GR: workerStatus('GR'),
+            BSCS: workerStatus('BSCS'),
+        },
+    };
+}
+
 async function runLogoCollectorOnce(worker) {
     if (
-        !LOGO_COLLECT_ENABLED ||
+        !logoCollectorEnabled ||
         !Object.prototype.hasOwnProperty.call(logoCollectorRunning, worker) ||
         logoCollectorRunning[worker]
     ) return;
@@ -2419,6 +2482,7 @@ async function runLogoCollectorOnce(worker) {
     if (running || jobQueue.length > 0) return;
 
     logoCollectorRunning[worker] = true;
+    setLogoCollectorWorkerStatus(worker, 'selecting');
     let samplePath = null;
 
     try {
@@ -2468,6 +2532,7 @@ async function runLogoCollectorOnce(worker) {
             `seconds=${LOGO_COLLECT_SAMPLE_SECONDS}`);
 
         let sample;
+        setLogoCollectorWorkerStatus(worker, 'sampling', target);
         try {
             sample = await sampleLiveService(target, samplePath);
         } catch (err) {
@@ -2492,6 +2557,7 @@ async function runLogoCollectorOnce(worker) {
         }
 
         let duration;
+        setLogoCollectorWorkerStatus(worker, 'probing', target);
         try {
             duration = await getCollectorSampleDuration(samplePath);
         } catch (err) {
@@ -2521,6 +2587,7 @@ async function runLogoCollectorOnce(worker) {
             return;
         }
 
+        setLogoCollectorWorkerStatus(worker, 'analyzing', target);
         try {
             await prepareLogoForStation(
                 samplePath, target.channelName, target.stationId, null, true
@@ -2550,6 +2617,7 @@ async function runLogoCollectorOnce(worker) {
             }
         }
         logoCollectorRunning[worker] = false;
+        setLogoCollectorWorkerStatus(worker, 'idle');
     }
 }
 
@@ -2572,15 +2640,20 @@ function cleanupLogoCollectorTempFiles() {
     }
 }
 
-function scheduleLogoCollector() {
-    if (!LOGO_COLLECT_ENABLED) {
-        log('logo collector disabled');
+function runLogoCollectorWorkers() {
+    if (!logoCollectorEnabled) {
         return;
     }
 
+    runLogoCollectorOnce('GR');
+    runLogoCollectorOnce('BSCS');
+}
+
+function scheduleLogoCollector() {
     cleanupLogoCollectorTempFiles();
 
-    log('logo collector enabled',
+    log('logo collector scheduler started',
+        `startupEnabled=${LOGO_COLLECT_ENABLED}`,
         `epgstation=${EPGSTATION_URL}`,
         `mirakurun=${MIRAKURUN_URL}`,
         `tmp=${LOGO_COLLECT_TMP_ROOT}`,
@@ -2588,13 +2661,8 @@ function scheduleLogoCollector() {
         `intervalMinutes=${LOGO_COLLECT_INTERVAL_MINUTES}`,
         `priority=${LOGO_COLLECT_PRIORITY}`);
 
-    const runWorkers = () => {
-        runLogoCollectorOnce('GR');
-        runLogoCollectorOnce('BSCS');
-    };
-
-    setTimeout(runWorkers, 5000);
-    setInterval(runWorkers, 60 * 1000);
+    setTimeout(runLogoCollectorWorkers, 5000);
+    setInterval(runLogoCollectorWorkers, 60 * 1000);
 }
 
 
@@ -3489,6 +3557,67 @@ const server = http.createServer(
                 );
             }
 
+            return;
+        }
+
+        if (
+            req.method === 'GET' &&
+            req.url === '/logo-collector/status'
+        ) {
+            sendJson(
+                res,
+                200,
+                getLogoCollectorRuntimeStatus()
+            );
+            return;
+        }
+
+        if (
+            req.method === 'POST' &&
+            req.url === '/logo-collector/start'
+        ) {
+            logoCollectorEnabled = true;
+
+            log(
+                'logo collector runtime enabled'
+            );
+
+            /*
+             * 次の60秒周期を待たずに開始判定する。
+             * 通常CM解析中なら runLogoCollectorOnce 側で安全に待機する。
+             */
+            setTimeout(
+                runLogoCollectorWorkers,
+                0
+            );
+
+            sendJson(
+                res,
+                200,
+                getLogoCollectorRuntimeStatus()
+            );
+            return;
+        }
+
+        if (
+            req.method === 'POST' &&
+            req.url === '/logo-collector/stop'
+        ) {
+            logoCollectorEnabled = false;
+
+            /*
+             * 実行中workerは強制終了しない。
+             * 現在の処理完了後、新規worker起動を停止する。
+             */
+            log(
+                'logo collector runtime disabled'
+            );
+
+            sendJson(
+                res,
+                200,
+                getLogoCollectorRuntimeStatus()
+            );
             return;
         }
 

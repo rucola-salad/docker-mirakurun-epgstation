@@ -41,6 +41,15 @@ services:
             - ./epgstation/cm-analyzer-data-test:/data
             - ./epgstation/cm-analyzer-data-test/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
             - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
+            - /mnt/hdd1/cm-analyzer-logo-collector-test:/logo-collector-tmp
+
+        environment:
+            EPGSTATION_URL: "http://epgstation-custom-test:8888"
+            MIRAKURUN_URL: "http://mirakurun:40772"
+            LOGO_COLLECT_ENABLED: "false"
+            LOGO_COLLECT_INTERVAL_MINUTES: "60"
+            LOGO_COLLECT_SAMPLE_SECONDS: "600"
+            LOGO_COLLECT_TMP_ROOT: "/logo-collector-tmp"
 
         restart: always
 

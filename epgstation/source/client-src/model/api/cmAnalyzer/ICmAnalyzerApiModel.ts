@@ -17,6 +17,30 @@ export interface ICmAnalyzerLogo {
     lastResult: string | null;
 }
 
+export type CmAnalyzerLogoCollectorPhase =
+    | 'idle'
+    | 'selecting'
+    | 'sampling'
+    | 'probing'
+    | 'analyzing';
+
+export interface ICmAnalyzerLogoCollectorWorkerStatus {
+    running: boolean;
+    phase: CmAnalyzerLogoCollectorPhase;
+    stationId: string | null;
+    channelName: string | null;
+    programName: string | null;
+}
+
+export interface ICmAnalyzerLogoCollectorStatus {
+    enabled: boolean;
+    startupEnabled: boolean;
+    workers: {
+        GR: ICmAnalyzerLogoCollectorWorkerStatus;
+        BSCS: ICmAnalyzerLogoCollectorWorkerStatus;
+    };
+}
+
 export interface ICmAnalyzerChapter {
     number: number;
     time: number;
@@ -82,6 +106,9 @@ export interface ICmAnalyzerAnalysis {
 export default interface ICmAnalyzerApiModel {
     getLogos(): Promise<ICmAnalyzerLogo[]>;
     deleteLogo(stationId: string): Promise<void>;
+    getLogoCollectorStatus(): Promise<ICmAnalyzerLogoCollectorStatus>;
+    startLogoCollector(): Promise<ICmAnalyzerLogoCollectorStatus>;
+    stopLogoCollector(): Promise<ICmAnalyzerLogoCollectorStatus>;
     getAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null>;
     saveManualTimeline(recordedId: number, frameRate: number, duration: number, pins: ICmAnalyzerManualPin[]): Promise<ICmAnalyzerAnalysis>;
     restoreAutomaticAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null>;

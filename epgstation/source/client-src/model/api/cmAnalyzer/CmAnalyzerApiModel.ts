@@ -1,6 +1,11 @@
 import { inject, injectable } from 'inversify';
 import IRepositoryModel from '../IRepositoryModel';
-import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerLogo, ICmAnalyzerManualPin } from './ICmAnalyzerApiModel';
+import ICmAnalyzerApiModel, {
+    ICmAnalyzerAnalysis,
+    ICmAnalyzerLogo,
+    ICmAnalyzerLogoCollectorStatus,
+    ICmAnalyzerManualPin,
+} from './ICmAnalyzerApiModel';
 
 @injectable()
 export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
@@ -25,6 +30,30 @@ export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
 
     public async deleteLogo(stationId: string): Promise<void> {
         await this.repository.delete(`/cm-analyzer/logos/${encodeURIComponent(stationId)}`);
+    }
+
+    public async getLogoCollectorStatus(): Promise<ICmAnalyzerLogoCollectorStatus> {
+        const result = await this.repository.get(
+            '/cm-analyzer/logo-collector/status',
+        );
+
+        return result.data as ICmAnalyzerLogoCollectorStatus;
+    }
+
+    public async startLogoCollector(): Promise<ICmAnalyzerLogoCollectorStatus> {
+        const result = await this.repository.post(
+            '/cm-analyzer/logo-collector/start',
+        );
+
+        return result.data as ICmAnalyzerLogoCollectorStatus;
+    }
+
+    public async stopLogoCollector(): Promise<ICmAnalyzerLogoCollectorStatus> {
+        const result = await this.repository.post(
+            '/cm-analyzer/logo-collector/stop',
+        );
+
+        return result.data as ICmAnalyzerLogoCollectorStatus;
     }
 
     public async getAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null> {
