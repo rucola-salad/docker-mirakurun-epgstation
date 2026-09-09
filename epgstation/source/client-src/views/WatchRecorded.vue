@@ -223,6 +223,11 @@ export default class WatchRecorded extends Vue {
             return;
         }
 
+        if (video.isChapterEditAvailable() === false) {
+            window.alert('CMカット済み動画ではチャプター編集できません。CMカット前の動画から編集してください。');
+            return;
+        }
+
         let analysis = video.getChapterEditAnalysis();
 
         if (analysis === null && this.recordedId !== null) {

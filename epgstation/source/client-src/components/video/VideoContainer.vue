@@ -384,6 +384,7 @@ export default class VideoContainer extends Vue {
     private cmAnalysisLoadSerial: number = 0;
     private cmAutoSkipSuppressedUntil: number = 0;
     private lastAutoSkippedCmRangeIndex: number | null = null;
+    private isChapterEditAvailableForCurrentVideo: boolean = false;
 
     public isJikkyoEnabled: boolean = this.settingStorageModel.tmp.showJikkyoByDefault;
     public isJikkyoAvailable: boolean = false;
@@ -578,6 +579,10 @@ export default class VideoContainer extends Vue {
         return this.cmAnalysis;
     }
 
+    public isChapterEditAvailable(): boolean {
+        return this.isChapterEditAvailableForCurrentVideo;
+    }
+
     public getChapterEditCurrentTime(): number {
         return this.currentTime;
     }
@@ -678,7 +683,7 @@ export default class VideoContainer extends Vue {
     }
 
     private async showChapterEditFramePreview(frame: number, frameRate: number): Promise<void> {
-        if (this.chapterEditEnabled === false) {
+        if (this.chapterEditEnabled === false || this.isChapterEditAvailable() === false) {
             return;
         }
 
@@ -827,6 +832,7 @@ export default class VideoContainer extends Vue {
 
         this.cmAnalysis = null;
         this.lastAutoSkippedCmRangeIndex = null;
+        this.isChapterEditAvailableForCurrentVideo = false;
 
         if (this.recordedId === null || typeof this.recordedId === 'undefined' || typeof this.recordedJikkyoVideoFileId === 'undefined') {
             return;
@@ -847,9 +853,11 @@ export default class VideoContainer extends Vue {
              * CMカット済み動画は元録画タイムラインと一致しないため、
              * チャプター移動もCM自動スキップも適用しない。
              */
-            if (videoFile && videoFile.cmState === 'cut') {
+            if (!videoFile || videoFile.cmState === 'cut') {
                 return;
             }
+
+            this.isChapterEditAvailableForCurrentVideo = true;
 
             const analysis = await this.cmAnalyzerApiModel.getAnalysis(this.recordedId);
 
