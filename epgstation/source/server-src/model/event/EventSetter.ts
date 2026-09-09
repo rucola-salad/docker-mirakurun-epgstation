@@ -246,11 +246,34 @@ export default class EventSetter implements IEventSetter {
                 // サムネイル作成
                 this.thumbnailManage.add(primaryVideoFileId);
 
+                /*
+                 * 録画終了イベント全体はチャプター解析完了を待たせない。
+                 *
+                 * この録画に対する自動エンコード投入だけを別の非同期処理にし、
+                 * Analyzer の処理終了後に開始する。
+                 *
+                 * Analyzer の処理自体が完了していれば、
+                 * チャプターが0件でも自動エンコードを開始する。
+                 */
+                const addAutomaticEncodesAfterChapterAnalysis = async (): Promise<void> => {
+                    try {
+                        await this.externalCommandManage.waitForRecordingChapterAnalysis(
+                            recorded,
+                            primaryVideoFileId as apid.VideoFileId,
+                        );
+                    } catch (err: any) {
+                        this.log.system.error(
+                            `automatic encode skipped because chapter analysis did not complete: recordedId=${recorded.id}`,
+                        );
+                        this.log.system.error(err);
+                        return;
+                    }
+
                 // エンコード追加 1
                 if (reserve.encodeMode1 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: primaryVideoFileId,
+                        sourceVideoFileId: primaryVideoFileId as apid.VideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName1 === null
                                 ? this.config.recorded[0].name
@@ -266,7 +289,7 @@ export default class EventSetter implements IEventSetter {
                 if (reserve.encodeMode2 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: primaryVideoFileId,
+                        sourceVideoFileId: primaryVideoFileId as apid.VideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName2 === null
                                 ? this.config.recorded[0].name
@@ -282,7 +305,7 @@ export default class EventSetter implements IEventSetter {
                 if (reserve.encodeMode3 !== null) {
                     this.ipc.setEncode({
                         recordedId: recorded.id,
-                        sourceVideoFileId: primaryVideoFileId,
+                        sourceVideoFileId: primaryVideoFileId as apid.VideoFileId,
                         parentDir:
                             reserve.encodeParentDirectoryName3 === null
                                 ? this.config.recorded[0].name
@@ -293,6 +316,14 @@ export default class EventSetter implements IEventSetter {
                         removeOriginal: reserve.isDeleteOriginalAfterEncode,
                     });
                 }
+                };
+
+                void addAutomaticEncodesAfterChapterAnalysis().catch(err => {
+                    this.log.system.error(
+                        `automatic encode scheduling failed: recordedId=${recorded.id}`,
+                    );
+                    this.log.system.error(err);
+                });
             }
 
             // tag の追加

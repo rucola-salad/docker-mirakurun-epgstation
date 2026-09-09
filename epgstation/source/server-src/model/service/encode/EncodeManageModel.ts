@@ -142,7 +142,12 @@ class EncodeManageModel implements IEncodeManageModel {
 
         // エンコード終了時の処理をセット
         encoder.setOnFinish((isError, outputFilePath) => {
-            this.onFinish(isError, outputFilePath, encodeOption);
+            this.onFinish(
+                isError,
+                outputFilePath,
+                encodeOption,
+                encoder.getSourceVideoFileId(),
+            );
         });
 
         // エンコードプロセス開始
@@ -173,7 +178,16 @@ class EncodeManageModel implements IEncodeManageModel {
      * @param outputFilePath: エンコードファイルパス
      * @param encodeOption: エンコードオプション
      */
-    private onFinish(isError: boolean, outputFilePath: string | null, encodeOption: EncodeOption): void {
+    private onFinish(
+        isError: boolean,
+        outputFilePath: string | null,
+        encodeOption: EncodeOption,
+        sourceVideoFileId: apid.VideoFileId | null,
+    ): void {
+        if (sourceVideoFileId === null) {
+            sourceVideoFileId = encodeOption.sourceVideoFileId;
+        }
+
         if (isError) {
             // エラー通知
             this.encodeEvent.emitErrorEncode();
@@ -182,7 +196,7 @@ class EncodeManageModel implements IEncodeManageModel {
             const fileName = outputFilePath === null ? null : path.basename(outputFilePath);
             if (
                 encodeOption.removeOriginal === true &&
-                this.hasSamVideoFileIdItem(encodeOption.sourceVideoFileId, encodeOption.encodeId) === true
+                this.hasSamVideoFileIdItem(sourceVideoFileId, encodeOption.encodeId) === true
             ) {
                 // queue に削除予定の videofile が存在するので、削除しないように false にする
                 encodeOption.removeOriginal = false;
@@ -190,7 +204,7 @@ class EncodeManageModel implements IEncodeManageModel {
 
             this.encodeEvent.emitFinishEncode({
                 recordedId: encodeOption.recordedId,
-                videoFileId: encodeOption.sourceVideoFileId,
+                videoFileId: sourceVideoFileId,
                 parentDirName: encodeOption.parentDir,
                 filePath:
                     outputFilePath === null || fileName === null
@@ -202,6 +216,8 @@ class EncodeManageModel implements IEncodeManageModel {
                 mode: encodeOption.mode,
                 removeOriginal: encodeOption.removeOriginal,
                 cmCut: encodeOption.cmCut,
+                sourceCmState: encodeOption.sourceCmState || 'unknown',
+                cmTimeline: encodeOption.cmTimeline,
             });
         }
 

@@ -4,6 +4,7 @@ import * as path from 'path';
 import Recorded from '../../../db/entities/Recorded';
 import Reserve from '../../../db/entities/Reserve';
 import ProcessUtil from '../../../util/ProcessUtil';
+import Util from '../../../util/Util';
 import IVideoUtil from '../../api/video/IVideoUtil';
 import IChannelDB from '../../db/IChannelDB';
 import IRecordedDB from '../../db/IRecordedDB';
@@ -15,6 +16,7 @@ import ILogger from '../../ILogger';
 import ILoggerModel from '../../ILoggerModel';
 import { IPromiseQueue } from '../../IPromiseQueue';
 import IExternalCommandManageModel from './IExternalCommandManageModel';
+import { requestCmAnalyzer } from '../../service/CmAnalyzerProxy';
 import * as apid from '../../../../api';
 
 @injectable()
@@ -124,6 +126,154 @@ export default class ExternalCommandManageModel implements IExternalCommandManag
         }
 
         this.addRecorded(this.config.recordingFinishCommand, recorded, videoFileId);
+    }
+
+    /**
+     * 録画直後のチャプター解析を実行して完了を待つ
+     *
+     * 解析結果そのものが生成されないことは許容する。
+     * ただし Analyzer が処理中の間は録画直後の自動エンコードを開始しない。
+     */
+    public async waitForRecordingChapterAnalysis(
+        recorded: Recorded,
+        videoFileId: apid.VideoFileId,
+    ): Promise<void> {
+        const recordedId = String(recorded.id);
+
+        const recPath = await this.videoUtil.getFullFilePathFromId(videoFileId);
+        if (recPath === null) {
+            this.log.system.error(
+                `chapter analysis cannot start: video path not found recordedId=${recordedId} videoFileId=${videoFileId}`,
+            );
+            throw new Error(
+                `ChapterAnalysisVideoPathIsNotFound: recordedId=${recordedId}`,
+            );
+        }
+
+        const channel = await this.channelDB.findId(recorded.channelId);
+
+        /*
+         * Analyzer への解析要求が受理されたことと、
+         * 解析結果としてチャプターが生成されることは別扱いにする。
+         *
+         * 解析要求自体に失敗した場合は自動エンコードを開始しない。
+         * 一方、解析要求が受理されて処理が終了した結果、
+         * チャプターが生成されなかった場合は正常終了として扱う。
+         */
+        let response;
+        try {
+            response = await requestCmAnalyzer(
+                '/analyze',
+                'POST',
+                {
+                    recordedId,
+                    recPath,
+                    channelName: channel === null ? '' : channel.name,
+                    title: recorded.name,
+                },
+                10000,
+            );
+        } catch (err: any) {
+            this.log.system.error(
+                `chapter analysis request failed: recordedId=${recordedId}`,
+            );
+            this.log.system.error(err);
+
+            throw new Error(
+                `ChapterAnalysisRequestFailed: recordedId=${recordedId}`,
+            );
+        }
+
+        if (response.statusCode !== 202) {
+            this.log.system.error(
+                `chapter analysis was not accepted: recordedId=${recordedId} status=${response.statusCode}`,
+            );
+
+            throw new Error(
+                `ChapterAnalysisRequestRejected: recordedId=${recordedId} status=${response.statusCode}`,
+            );
+        }
+
+        this.log.system.info(
+            `chapter analysis accepted: recordedId=${recordedId}`,
+        );
+
+        const timeoutMs = 30 * 60 * 1000;
+        const pollIntervalMs = 2000;
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < timeoutMs) {
+            let healthResponse;
+
+            try {
+                healthResponse = await requestCmAnalyzer(
+                    '/health',
+                    'GET',
+                    undefined,
+                    10000,
+                );
+            } catch (err: any) {
+                this.log.system.warn(
+                    `chapter analysis status lookup failed: recordedId=${recordedId}`,
+                );
+
+                await Util.sleep(pollIntervalMs);
+                continue;
+            }
+
+            if (healthResponse.statusCode !== 200) {
+                await Util.sleep(pollIntervalMs);
+                continue;
+            }
+
+            let health: any;
+
+            try {
+                health = JSON.parse(
+                    healthResponse.body.toString('utf8'),
+                );
+            } catch (_err) {
+                await Util.sleep(pollIntervalMs);
+                continue;
+            }
+
+            const currentRecordedId =
+                health.currentJob !== null &&
+                typeof health.currentJob !== 'undefined'
+                    ? String(health.currentJob.recordedId)
+                    : null;
+
+            const queued =
+                Array.isArray(health.queuedJobs) &&
+                health.queuedJobs.some((job: any) => {
+                    return String(job.recordedId) === recordedId;
+                });
+
+            const running =
+                currentRecordedId === recordedId;
+
+            if (running === false && queued === false) {
+                /*
+                 * analysis.json の有無はここでは判定しない。
+                 *
+                 * 解析処理が終わったことだけを保証する。
+                 * 結果が無ければ後段はチャプターなしで処理する。
+                 */
+                this.log.system.info(
+                    `chapter analysis finished: recordedId=${recordedId}`,
+                );
+                return;
+            }
+
+            await Util.sleep(pollIntervalMs);
+        }
+
+        /*
+         * 「解析中なのにエンコード開始」は許可しない。
+         */
+        throw new Error(
+            `ChapterAnalysisWaitTimeout: recordedId=${recordedId}`,
+        );
     }
 
     /**

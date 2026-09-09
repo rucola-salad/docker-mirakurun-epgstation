@@ -10,6 +10,7 @@ export default interface IExternalCommandManageModel {
     addRecordingPrepRecFailedCmd(reserve: Reserve): void;
     addRecordingStartCmd(recorded: Recorded): void;
     addRecordingFinishCmd(recorded: Recorded, videoFileId?: apid.VideoFileId | null): void;
+    waitForRecordingChapterAnalysis(recorded: Recorded, videoFileId: apid.VideoFileId): Promise<void>;
     addRecordingFailedCmd(recorded: Recorded): void;
     addEncodingFinishCmd(info: OperatorFinishEncodeInfo): void;
 }

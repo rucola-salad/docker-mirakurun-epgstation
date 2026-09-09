@@ -34,9 +34,11 @@ const recordedId = process.argv[2];
 const EPGSTATION = process.env.EPGSTATION_URL || 'http://127.0.0.1:8888';
 const RECORDED_ROOT = process.env.RECORDED_ROOT || '/app/recorded';
 const TIMING_DIR = '/app/data/jikkyo-cache';
+const CMCUT_TIMELINE_DIR = path.join(TIMING_DIR, 'cmcut');
 const LOG = '/app/logs/jikkyo-fetch.log';
 
 const outputPath = process.env.OUTPUTPATH || null;
+const outputVideoFileId = process.env.VIDEOFILEID || null;
 const delay = Number(process.env.JIKKYO_DELAY || '0');
 
 function log(message) {
@@ -418,6 +420,152 @@ function countXmlComments(text) {
     return (text.match(/<chat\b/g) || []).length;
 }
 
+/*
+ * CMカット動画の生成時に保存したtimeline snapshotを読み込む。
+ *
+ * Analyzerの現在値ではなく、実際にその動画へ使用したkeepRangesを
+ * 使用することで、後から手動編集された場合でも実況位置を維持する。
+ */
+function loadCmCutTimeline(videoFileId) {
+    if (videoFileId === null || typeof videoFileId === 'undefined') {
+        return null;
+    }
+
+    const snapshotPath = path.join(
+        CMCUT_TIMELINE_DIR,
+        `${videoFileId}.json`
+    );
+
+    if (!fs.existsSync(snapshotPath)) {
+        log(`WARN CM cut timeline not found: ${snapshotPath}`);
+        return null;
+    }
+
+    let snapshot;
+
+    try {
+        snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    } catch (e) {
+        log(`WARN CM cut timeline read failed: ${snapshotPath}: ${e.message}`);
+        return null;
+    }
+
+    if (
+        !Number.isFinite(Number(snapshot.frameRate)) ||
+        Number(snapshot.frameRate) <= 0 ||
+        !Array.isArray(snapshot.keepRanges) ||
+        snapshot.keepRanges.length === 0
+    ) {
+        log(`WARN invalid CM cut timeline: ${snapshotPath}`);
+        return null;
+    }
+
+    for (const range of snapshot.keepRanges) {
+        if (
+            !Number.isFinite(Number(range.startFrame)) ||
+            !Number.isFinite(Number(range.endFrame)) ||
+            Number(range.startFrame) < 0 ||
+            Number(range.endFrame) < Number(range.startFrame)
+        ) {
+            log(`WARN invalid CM cut range: ${snapshotPath}`);
+            return null;
+        }
+    }
+
+    return snapshot;
+}
+
+/*
+ * 元タイムラインの実況コメントをCMカット後のタイムラインへ変換する。
+ *
+ * keepRanges外のコメントは削除し、keepRanges内のコメントは
+ * それ以前に残された区間の累積時間へ詰め直す。
+ *
+ * vposは1/100秒単位。
+ */
+function convertForCmCut(converted, snapshot, baseTime) {
+    const frameRate = Number(snapshot.frameRate);
+
+    const ranges = snapshot.keepRanges.map(range => ({
+        start: Number(range.startFrame) / frameRate,
+        end: (Number(range.endFrame) + 1) / frameRate,
+    }));
+
+    let cumulative = 0;
+
+    for (const range of ranges) {
+        range.outputStart = cumulative;
+        cumulative += range.end - range.start;
+    }
+
+    let count = 0;
+
+    const text = converted.text.replace(
+        /<chat\b[^>]*>[\s\S]*?<\/chat>/g,
+        chat => {
+            const dateMatch = chat.match(/\bdate="(\d+)"/);
+
+            if (!dateMatch) {
+                return '';
+            }
+
+            const usecMatch = chat.match(/\bdate_usec="(\d+)"/);
+
+            let absoluteTime = Number(dateMatch[1]);
+
+            if (usecMatch) {
+                absoluteTime += Number(usecMatch[1]) / 1000000;
+            }
+
+            const sourceTime = absoluteTime - baseTime;
+
+            const range = ranges.find(
+                item =>
+                    sourceTime >= item.start &&
+                    sourceTime < item.end
+            );
+
+            /*
+             * CM区間、先頭カット、末尾カットに存在するコメントは
+             * CMカット動画には出力しない。
+             */
+            if (!range) {
+                return '';
+            }
+
+            const outputTime =
+                range.outputStart +
+                sourceTime -
+                range.start;
+
+            const vpos = Math.max(
+                0,
+                Math.round(outputTime * 100)
+            );
+
+            count++;
+
+            if (/\bvpos="-?\d+"/.test(chat)) {
+                return chat.replace(
+                    /\bvpos="-?\d+"/,
+                    `vpos="${vpos}"`
+                );
+            }
+
+            return chat.replace(
+                '<chat ',
+                `<chat vpos="${vpos}" `
+            );
+        }
+    );
+
+    return {
+        text,
+        count,
+        duration: cumulative,
+    };
+}
+
 async function fetchComments(jkId, timing) {
     log(`baseTime=${timing.baseTime}`);
     log(`fetchStart=${timing.fetchStart}`);
@@ -604,14 +752,48 @@ function writeXml(destXml, converted) {
     const targets = new Map();
     const preferredDir = tsPath ? path.dirname(tsPath) : null;
 
+    function addTarget(videoPath, videoInfo) {
+        targets.set(
+            xmlPathForVideo(videoPath),
+            {
+                videoPath,
+                videoFileId:
+                    videoInfo && typeof videoInfo.id !== 'undefined'
+                        ? videoInfo.id
+                        : null,
+                cmState:
+                    videoInfo && typeof videoInfo.cmState === 'string'
+                        ? videoInfo.cmState
+                        : 'unknown',
+            }
+        );
+    }
+
     if (tsPath) {
-        targets.set(xmlPathForVideo(tsPath), tsPath);
+        addTarget(tsPath, tsInfo || null);
     }
 
     if (outputPath) {
         if (fs.existsSync(outputPath)) {
             log(`OUTPUT ${outputPath}`);
-            targets.set(xmlPathForVideo(outputPath), outputPath);
+
+            const outputInfo = (recorded.videoFiles || []).find(
+                item =>
+                    outputVideoFileId !== null &&
+                    Number(item.id) === Number(outputVideoFileId)
+            );
+
+            addTarget(
+                outputPath,
+                outputInfo || (
+                    outputVideoFileId === null
+                        ? null
+                        : {
+                            id: outputVideoFileId,
+                            cmState: 'unknown',
+                        }
+                )
+            );
         } else {
             log(`WARN OUTPUTPATH not found: ${outputPath}`);
         }
@@ -625,7 +807,7 @@ function writeXml(destXml, converted) {
             continue;
         }
 
-        targets.set(xmlPathForVideo(videoPath), videoPath);
+        addTarget(videoPath, video);
     }
 
     if (targets.size === 0) {
@@ -634,9 +816,47 @@ function writeXml(destXml, converted) {
 
     let updated = 0;
     let preserved = 0;
+    let skipped = 0;
 
-    for (const [destXml] of targets) {
-        const result = writeXml(destXml, converted);
+    for (const [destXml, target] of targets) {
+        let targetConverted = converted;
+
+        if (target.cmState === 'cut') {
+            const snapshot = loadCmCutTimeline(
+                target.videoFileId
+            );
+
+            /*
+             * snapshotが無いCMカット動画へ元タイムラインのXMLを
+             * 誤って書くことはしない。
+             */
+            if (!snapshot) {
+                log(
+                    `SKIP CM cut XML: ${destXml}` +
+                    ` videoFileId=${target.videoFileId}`
+                );
+                skipped++;
+                continue;
+            }
+
+            targetConverted = convertForCmCut(
+                converted,
+                snapshot,
+                timing.baseTime
+            );
+
+            log(
+                `CM CUT XML videoFileId=${target.videoFileId}` +
+                ` comments=${targetConverted.count}` +
+                ` duration=${targetConverted.duration}`
+            );
+        }
+
+        const result = writeXml(
+            destXml,
+            targetConverted
+        );
+
         if (result === 'updated') {
             updated++;
         } else {
@@ -647,7 +867,8 @@ function writeXml(destXml, converted) {
     log(
         `JIKKYO RESULT comments=${converted.count}` +
         ` updated=${updated}` +
-        ` preserved=${preserved}`
+        ` preserved=${preserved}` +
+        ` skipped=${skipped}`
     );
     log(`COMPLETE recordedId=${recordedId}`);
 })().catch(err => {

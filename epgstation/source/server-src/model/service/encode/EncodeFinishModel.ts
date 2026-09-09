@@ -1,4 +1,6 @@
+import * as fs from 'fs';
 import { inject, injectable } from 'inversify';
+import * as path from 'path';
 import * as apid from '../../../../api';
 import IEncodeEvent, { FinishEncodeInfo } from '../../event/IEncodeEvent';
 import ILogger from '../../ILogger';
@@ -56,7 +58,59 @@ export default class EncodeFinishModel implements IEncodeFinishModel {
      */
     private async finishEncode(info: FinishEncodeInfo): Promise<void> {
         let newVideoFileId: apid.VideoFileId | null = null;
+        let cmCutTimelineSnapshot: {
+            frameRate: number;
+            keepRanges: Array<{
+                startFrame: number;
+                endFrame: number;
+            }>;
+        } | null = null;
+
         try {
+            /*
+             * CMカット動画では実況XML再生成用snapshotを必須とする。
+             * DBへ動画を登録する前にtimelineを検証し、不正な状態の
+             * CMカット動画だけが登録されることを防ぐ。
+             */
+            if (info.cmCut === true) {
+                if (
+                    typeof info.cmTimeline !== 'string' ||
+                    info.cmTimeline === ''
+                ) {
+                    throw new Error('CmCutTimelineSnapshotIsNotFound');
+                }
+
+                const timeline = JSON.parse(info.cmTimeline);
+
+                if (
+                    typeof timeline.frameRate !== 'number' ||
+                    Number.isFinite(timeline.frameRate) === false ||
+                    timeline.frameRate <= 0 ||
+                    Array.isArray(timeline.keepRanges) === false ||
+                    timeline.keepRanges.length === 0
+                ) {
+                    throw new Error('InvalidCmCutTimelineSnapshot');
+                }
+
+                for (const range of timeline.keepRanges) {
+                    if (
+                        typeof range.startFrame !== 'number' ||
+                        Number.isFinite(range.startFrame) === false ||
+                        typeof range.endFrame !== 'number' ||
+                        Number.isFinite(range.endFrame) === false ||
+                        range.startFrame < 0 ||
+                        range.endFrame < range.startFrame
+                    ) {
+                        throw new Error('InvalidCmCutTimelineSnapshot');
+                    }
+                }
+
+                cmCutTimelineSnapshot = {
+                    frameRate: timeline.frameRate,
+                    keepRanges: timeline.keepRanges,
+                };
+            }
+
             if (info.fullOutputPath === null || info.filePath === null) {
                 // update file size
                 await this.ipc.recorded.updateVideoFileSize(info.videoFileId);
@@ -68,9 +122,49 @@ export default class EncodeFinishModel implements IEncodeFinishModel {
                     filePath: info.filePath,
                     type: 'encoded',
                     name: info.mode,
-                    cmState: 'uncut',
+                    cmState: info.cmCut === true ? 'cut' : info.sourceCmState,
                 });
                 newVideoFileId = id;
+
+                /*
+                 * CMカット動画の実況XMLを後から再生成できるように、
+                 * 実際にエンコードへ使用したkeepRangesを動画単位で保存する。
+                 *
+                 * Analyzer側の手動編集が後から変更されても、
+                 * 既に生成済みの動画の時間軸はこのsnapshotを使用する。
+                 */
+                if (cmCutTimelineSnapshot !== null) {
+                    const snapshotDir =
+                        '/app/data/jikkyo-cache/cmcut';
+                    const snapshotPath = path.join(
+                        snapshotDir,
+                        `${id}.json`,
+                    );
+                    const tmpPath =
+                        `${snapshotPath}.tmp-${process.pid}`;
+
+                    fs.mkdirSync(snapshotDir, { recursive: true });
+
+                    fs.writeFileSync(
+                        tmpPath,
+                        JSON.stringify({
+                            version: 1,
+                            recordedId: info.recordedId,
+                            videoFileId: id,
+                            frameRate:
+                                cmCutTimelineSnapshot.frameRate,
+                            keepRanges:
+                                cmCutTimelineSnapshot.keepRanges,
+                        }),
+                        'utf8',
+                    );
+
+                    fs.renameSync(tmpPath, snapshotPath);
+
+                    this.log.encode.info(
+                        `save CM cut jikkyo timeline: ${snapshotPath}`,
+                    );
+                }
             }
         } catch (err: any) {
             this.log.encode.error('finish encode error');

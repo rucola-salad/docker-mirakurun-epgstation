@@ -11,25 +11,143 @@ fi
 
 FFMPEG="${FFMPEG:-/opt/ffmpeg-7.0.2/bin/ffmpeg}"
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD128}"
+HELPER="/app/config/cm-encode-helper.js"
 
 export LIBVA_DRIVER_NAME=i965
 
-exec "$FFMPEG" \
-    -y \
-    -vaapi_device "$VAAPI_DEVICE" \
-    -dual_mono_mode main \
-    -i "$INPUT" \
-    -map 0:v:0 \
-    -map 0:a:0? \
-    -sn \
-    -dn \
-    -vf "fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload" \
-    -c:v h264_vaapi \
-    -qp 22 \
-    -profile:v high \
-    -c:a aac \
-    -b:a 128k \
-    -ar 48000 \
-    -ac 2 \
-    -movflags +faststart \
-    "$OUTPUT"
+META_FILE=""
+
+cleanup()
+{
+    if [ -n "$META_FILE" ] && [ -f "$META_FILE" ]; then
+        rm -f "$META_FILE"
+    fi
+}
+
+trap cleanup EXIT INT TERM
+
+HELPER_JSON=""
+
+if [ -n "${CM_TIMELINE:-}" ]; then
+    HELPER_JSON="$(node "$HELPER")"
+fi
+
+if [ -n "$HELPER_JSON" ]; then
+    META_FILE="$(mktemp /tmp/epgstation-chapters.XXXXXX.ffmeta)"
+
+    node "$HELPER" \
+        --metadata "$META_FILE"
+
+    if [ ! -s "$META_FILE" ]; then
+        rm -f "$META_FILE"
+        META_FILE=""
+    fi
+fi
+
+if [ "${CM_CUT:-0}" = "1" ]; then
+    if [ -z "$HELPER_JSON" ]; then
+        echo "CM_TIMELINE is required for CM cut." >&2
+        exit 1
+    fi
+
+    CUT_FILTER="$(
+        node "$HELPER" --filter-fieldmatch
+    )"
+
+    if [ -z "$CUT_FILTER" ]; then
+        echo "CM cut filter is empty." >&2
+        exit 1
+    fi
+
+    FILTER_COMPLEX="${CUT_FILTER};[vcut]fps=30000/1001,decimate,setpts=PTS-STARTPTS,scale=1280:720:flags=bilinear,format=nv12,hwupload[vout]"
+
+    if [ -n "$META_FILE" ]; then
+        "$FFMPEG" \
+            -y \
+            -vaapi_device "$VAAPI_DEVICE" \
+            -dual_mono_mode main \
+            -i "$INPUT" \
+            -f ffmetadata -i "$META_FILE" \
+            -filter_complex "$FILTER_COMPLEX" \
+            -map '[vout]' \
+            -map '[acut]' \
+            -map_chapters 1 \
+            -sn \
+            -dn \
+            -c:v h264_vaapi \
+            -qp 22 \
+            -profile:v high \
+            -r 24000/1001 \
+            -c:a aac \
+            -b:a 128k \
+            -ar 48000 \
+            -ac 2 \
+            -movflags +faststart \
+            "$OUTPUT"
+    else
+        "$FFMPEG" \
+            -y \
+            -vaapi_device "$VAAPI_DEVICE" \
+            -dual_mono_mode main \
+            -i "$INPUT" \
+            -filter_complex "$FILTER_COMPLEX" \
+            -map '[vout]' \
+            -map '[acut]' \
+            -sn \
+            -dn \
+            -c:v h264_vaapi \
+            -qp 22 \
+            -profile:v high \
+            -r 24000/1001 \
+            -c:a aac \
+            -b:a 128k \
+            -ar 48000 \
+            -ac 2 \
+            -movflags +faststart \
+            "$OUTPUT"
+    fi
+
+elif [ -n "$META_FILE" ]; then
+    "$FFMPEG" \
+        -y \
+        -vaapi_device "$VAAPI_DEVICE" \
+        -dual_mono_mode main \
+        -i "$INPUT" \
+        -f ffmetadata -i "$META_FILE" \
+        -map 0:v:0 \
+        -map 0:a:0? \
+        -map_chapters 1 \
+        -sn \
+        -dn \
+        -vf "fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload" \
+        -c:v h264_vaapi \
+        -qp 22 \
+        -profile:v high \
+        -c:a aac \
+        -b:a 128k \
+        -ar 48000 \
+        -ac 2 \
+        -movflags +faststart \
+        "$OUTPUT"
+
+else
+    "$FFMPEG" \
+        -y \
+        -vaapi_device "$VAAPI_DEVICE" \
+        -dual_mono_mode main \
+        -i "$INPUT" \
+        -map 0:v:0 \
+        -map 0:a:0? \
+        -sn \
+        -dn \
+        -vf "fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload" \
+        -c:v h264_vaapi \
+        -qp 22 \
+        -profile:v high \
+        -c:a aac \
+        -b:a 128k \
+        -ar 48000 \
+        -ac 2 \
+        -movflags +faststart \
+        "$OUTPUT"
+fi

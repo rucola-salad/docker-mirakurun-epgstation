@@ -3,7 +3,6 @@
 set -u
 
 LOG=/app/logs/recording-finish.log
-CM_ANALYZER_URL="${CM_ANALYZER_URL:-http://cm-analyzer:8080}"
 
 log()
 {
@@ -12,88 +11,16 @@ log()
         "$*" >> "$LOG"
 }
 
-json_escape()
-{
-    node -e '
-const s = process.argv[1] || "";
-process.stdout.write(JSON.stringify(s));
-' "$1"
-}
-
-RECORDED_ID="${RECORDEDID:-}"
-REC_PATH="${RECPATH:-}"
-CHANNEL_NAME="${CHANNELNAME:-}"
-TITLE="${NAME:-}"
-
-log "recording finish start recordedId=${RECORDED_ID} recPath=${REC_PATH}"
-
 #
-# CM解析要求
+# CM解析について
 #
-if [ -z "$RECORDED_ID" ] || [ -z "$REC_PATH" ]; then
-    log "cm-analyzer skipped: RECORDEDID or RECPATH is empty"
-else
-
-RECORDED_ID_JSON=$(json_escape "$RECORDED_ID")
-REC_PATH_JSON=$(json_escape "$REC_PATH")
-CHANNEL_NAME_JSON=$(json_escape "$CHANNEL_NAME")
-TITLE_JSON=$(json_escape "$TITLE")
-
-BODY=$(cat <<JSON
-{
-  "recordedId": ${RECORDED_ID_JSON},
-  "recPath": ${REC_PATH_JSON},
-  "channelName": ${CHANNEL_NAME_JSON},
-  "title": ${TITLE_JSON}
-}
-JSON
-)
-
-node - "${CM_ANALYZER_URL%/}/analyze" "$BODY" >> "$LOG" 2>&1 <<'NODE'
-const http = require('http');
-
-const url = new URL(process.argv[2]);
-const body = process.argv[3];
-
-const req = http.request({
-    hostname: url.hostname,
-    port: url.port || 80,
-    path: url.pathname,
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-    },
-}, res => {
-    let data = '';
-
-    res.on('data', chunk => {
-        data += chunk;
-    });
-
-    res.on('end', () => {
-        console.log(
-            new Date().toISOString(),
-            'cm-analyzer response',
-            'status=' + res.statusCode,
-            data
-        );
-    });
-});
-
-req.on('error', err => {
-    console.error(
-        new Date().toISOString(),
-        'cm-analyzer request error',
-        err
-    );
-});
-
-req.end(body);
-NODE
-
-log "cm-analyzer request finished recordedId=${RECORDED_ID}"
-fi
+# 録画直後の自動エンコードとの実行順を保証するため、
+# CM Analyzer への解析要求と完了待ちは EPGStation 側の
+# waitForRecordingChapterAnalysis() で解析完了を確認してから
+# その録画の自動エンコードを投入する。
+#
+# この recording-finish.sh では実況コメント取得のみを行う。
+#
 
 #
 # 既存の実況コメント取得

@@ -2,6 +2,8 @@ import * as apid from '../../../../api';
 
 export interface EncodeOption extends apid.AddEncodeProgramOption {
     encodeId: apid.EncodeId;
+    sourceCmState?: apid.VideoFileCmState;
+    cmTimeline?: string;
 }
 
 export interface EncodeProgressInfo {
@@ -19,4 +21,5 @@ export interface IEncoderModel {
     getEncodeOption(): EncodeOption | null;
     getProgressInfo(): EncodeProgressInfo | null;
     getEncodeId(): apid.EncodeId | null;
+    getSourceVideoFileId(): apid.VideoFileId | null;
 }

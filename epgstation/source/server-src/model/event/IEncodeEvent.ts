@@ -9,6 +9,8 @@ export interface FinishEncodeInfo {
     mode: string; // エンコードモード名
     removeOriginal: boolean; // ts を削除するか
     cmCut: boolean; // CMカットするか
+    sourceCmState: apid.VideoFileCmState; // エンコード元のCM状態
+    cmTimeline?: string; // CMカット時に実際に使用した最終timeline
 }
 
 export default interface IEncodeEvent {

@@ -17,6 +17,7 @@ import ILoggerModel from '../../ILoggerModel';
 import IEncodeFileManageModel from './IEncodeFileManageModel';
 import IEncodeProcessManageModel from './IEncodeProcessManageModel';
 import { EncodeOption, EncodeProgressInfo, IEncoderModel } from './IEncoderModel';
+import { requestCmAnalyzer } from '../CmAnalyzerProxy';
 
 @injectable()
 class EncoderModel implements IEncoderModel {
@@ -37,6 +38,7 @@ class EncoderModel implements IEncoderModel {
     private timerId: NodeJS.Timer | null = null; // タイムアウト検知用タイマーid
     private isCanceld: boolean = false; // キャンセルが呼び出されたか?
     private progressInfo: EncodeProgressInfo | null = null;
+    private sourceVideoFileId: apid.VideoFileId | null = null;
 
     constructor(
         @inject('ILoggerModel') logger: ILoggerModel,
@@ -93,7 +95,7 @@ class EncoderModel implements IEncoderModel {
         }
 
         // エンコード元ファイルの情報を取得
-        const video = await this.videoFileDB.findId(this.encodeOption.sourceVideoFileId);
+        let video = await this.videoFileDB.findId(this.encodeOption.sourceVideoFileId);
         if (video === null) {
             throw new Error('VideoFileIdIsNotFound');
         }
@@ -104,6 +106,66 @@ class EncoderModel implements IEncoderModel {
             throw new Error('RecordedIsNotFound');
         }
 
+        /*
+         * CMカットでは、まだCMカットされていない動画だけを入力候補にする。
+         *
+         * TS を優先し、TS が無ければ encoded の uncut 動画を使用する。
+         * cut / unknown はCMカット元として使用しない。
+         */
+        if (this.encodeOption.cmCut === true) {
+            const videos = await this.videoFileDB.findAll();
+
+            const candidates = videos
+                .filter(v => {
+                    return v.recordedId === this.encodeOption?.recordedId &&
+                        v.cmState === 'uncut';
+                })
+                .sort((a, b) => {
+                    if (a.type === b.type) {
+                        return a.id - b.id;
+                    }
+
+                    return a.type === 'ts' ? -1 : 1;
+                });
+
+            let cmCutSource = null;
+
+            for (const candidate of candidates) {
+                const candidatePath =
+                    await this.videoUtil.getFullFilePathFromId(candidate.id);
+
+                if (candidatePath === null) {
+                    continue;
+                }
+
+                try {
+                    await FileUtil.stat(candidatePath);
+                    cmCutSource = candidate;
+                    break;
+                } catch (_err) {
+                    // DBには存在するが実ファイルが無い候補は使用しない
+                }
+            }
+
+            if (cmCutSource === null) {
+                throw new Error('CmCutSourceVideoIsNotFound');
+            }
+
+            video = cmCutSource;
+        }
+
+        /*
+         * queue に登録された sourceVideoFileId は変更しない。
+         *
+         * CMカットでは同じ録画の別の uncut 動画を実入力として
+         * 選択する場合があるため、実際に使用する videoFileId を
+         * 別途保持する。
+         */
+        this.sourceVideoFileId = video.id;
+
+        this.encodeOption.sourceCmState =
+            video.cmState as apid.VideoFileCmState;
+
         // 放送局情報を取得する
         const channel = await this.channelDB.findId(recorded.channelId);
         if (channel === null) {
@@ -111,7 +173,7 @@ class EncoderModel implements IEncoderModel {
         }
 
         // ソースビデオファイルのファイルパスを生成する
-        const inputFilePath = await this.videoUtil.getFullFilePathFromId(this.encodeOption.sourceVideoFileId);
+        const inputFilePath = await this.videoUtil.getFullFilePathFromId(video.id);
         if (inputFilePath === null) {
             throw new Error('VideoPathIsNotFound');
         }
@@ -154,6 +216,87 @@ class EncoderModel implements IEncoderModel {
 
         const config = this.configure.getConfig();
 
+        /*
+         * Analyzer の最終 timeline を取得する。
+         *
+         * 通常エンコード:
+         *   uncut の動画だけが Analyzer の元時間軸と一致するため、
+         *   uncut の場合だけ timeline を使用する。
+         *   timeline が無ければ chapter 無しで続行する。
+         *
+         * CMカット:
+         *   keepRanges が必須。無ければ通常エンコードへ
+         *   フォールバックせずエラーにする。
+         */
+        let cmTimeline = '';
+
+        if (
+            this.encodeOption.cmCut === true ||
+            video.cmState === 'uncut'
+        ) {
+            try {
+                const response = await requestCmAnalyzer(
+                    `/analysis/${recorded.id}`,
+                    'GET',
+                    undefined,
+                    10000,
+                );
+
+                if (response.statusCode === 200) {
+                    const analysis = JSON.parse(
+                        response.body.toString('utf8'),
+                    );
+
+                    if (
+                        analysis !== null &&
+                        typeof analysis === 'object' &&
+                        analysis.timeline !== null &&
+                        typeof analysis.timeline === 'object'
+                    ) {
+                        cmTimeline = JSON.stringify(analysis.timeline);
+                    }
+                }
+            } catch (err: any) {
+                if (this.encodeOption.cmCut === true) {
+                    this.log.encode.error(
+                        `CM analysis read failed: recordedId=${recorded.id}`,
+                    );
+                    throw err;
+                }
+
+                this.log.encode.warn(
+                    `chapter information is unavailable: recordedId=${recorded.id}`,
+                );
+            }
+        }
+
+        if (this.encodeOption.cmCut === true) {
+            if (encodeCmd.cmd.indexOf('sl-enc.js') !== -1) {
+                throw new Error('CmCutEncodeModeIsNotSupported');
+            }
+
+            if (cmTimeline === '') {
+                throw new Error('CmCutTimelineIsNotFound');
+            }
+
+            const timeline = JSON.parse(cmTimeline);
+
+            if (
+                typeof timeline.frameRate !== 'number' ||
+                Array.isArray(timeline.keepRanges) === false ||
+                timeline.keepRanges.length === 0
+            ) {
+                throw new Error('CmCutKeepRangesIsNotFound');
+            }
+        }
+
+        /*
+         * CMカット出力の実況コメントを後から再生成できるように、
+         * 実際にエンコードへ使用した最終 timeline を finish 処理まで保持する。
+         */
+        this.encodeOption.cmTimeline =
+            this.encodeOption.cmCut === true ? cmTimeline : undefined;
+
         // DIR
         let dir: string = '';
         if (typeof encodeCmd.suffix === 'undefined' && typeof this.encodeOption.directory !== 'undefined') {
@@ -187,6 +330,8 @@ class EncoderModel implements IEncoderModel {
                     SUBDIR: this.encodeOption.directory || '',
                     FFMPEG: config.ffmpeg,
                     FFPROBE: config.ffprobe,
+                    CM_CUT: this.encodeOption.cmCut === true ? '1' : '0',
+                    CM_TIMELINE: cmTimeline,
                     NAME: recorded.name,
                     HALF_WIDTH_NAME: recorded.halfWidthName,
                     DESCRIPTION: recorded.description || '',
@@ -429,12 +574,20 @@ class EncoderModel implements IEncoderModel {
     public getEncodeId(): apid.EncodeId | null {
         return this.encodeOption === null ? null : this.encodeOption.encodeId;
     }
+    /**
+     * 実際にエンコード入力として使用した video file id を取得する
+     */
+    public getSourceVideoFileId(): apid.VideoFileId | null {
+        return this.sourceVideoFileId;
+    }
+
 }
 
 namespace EncoderModel {
     export const ENCODE_FINISH_EVENT = 'encodeFinishEvent';
     export const ENCODE_PRIPORITY = 10;
     export const DEFAULT_TIMEOUT_RATE = 4.0;
+
 }
 
 export default EncoderModel;
