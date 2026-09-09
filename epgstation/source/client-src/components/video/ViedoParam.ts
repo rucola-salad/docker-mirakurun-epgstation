@@ -10,6 +10,7 @@ export interface BaseVideoParam {
 export interface NormalVideoParam extends BaseVideoParam {
     type: 'Normal';
     src: string;
+    videoFileId?: apid.VideoFileId;
 }
 
 export interface RecordedStreamingParam extends BaseVideoParam {

@@ -668,6 +668,12 @@ export default class VideoContainer extends Vue {
             return (this.videoParam as VideoParam.RecordedHLSParam).videoFileId;
         }
 
+        if (this.videoParam.type === 'Normal') {
+            const videoFileId = (this.videoParam as VideoParam.NormalVideoParam).videoFileId;
+
+            return typeof videoFileId === 'number' ? videoFileId : null;
+        }
+
         return null;
     }
 
