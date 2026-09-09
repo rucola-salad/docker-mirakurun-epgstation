@@ -148,44 +148,44 @@ function resolveVideoFile(preferredDir, filename) {
 function getJikkyoId(channel) {
     if (channel.channelType === 'GR') {
         const map = {
-            1: 'jk1',
-            2: 'jk2',
-            3: 'jk12',
-            4: 'jk4',
-            5: 'jk5',
-            6: 'jk6',
-            7: 'jk7',
-            8: 'jk8',
-            9: 'jk9',
+            1: 'jk1',   // NHK総合
+            2: 'jk2',   // NHK Eテレ
+            3: 'jk12',  // チバテレ
+            4: 'jk4',   // 日テレ
+            5: 'jk5',   // テレ朝
+            6: 'jk6',   // TBS
+            7: 'jk7',   // テレ東
+            8: 'jk8',   // フジ
+            9: 'jk9',   // TOKYO MX
         };
         return map[channel.remoteControlKeyId] || null;
     }
 
     if (channel.channelType === 'BS') {
         const map = {
-            101: 'jk101',
-            141: 'jk141',
-            151: 'jk151',
-            161: 'jk161',
-            171: 'jk171',
-            181: 'jk181',
-            191: 'jk191',
-            192: 'jk192',
-            193: 'jk193',
-            200: 'jk200',
-            201: 'jk201',
-            211: 'jk211',
-            222: 'jk222',
-            236: 'jk236',
-            252: 'jk252',
-            265: 'jk265',
+            101: 'jk101', // NHK BS
+            141: 'jk141', // BS日テレ
+            151: 'jk151', // BS朝日
+            161: 'jk161', // BS-TBS
+            171: 'jk171', // BSテレ東
+            181: 'jk181', // BSフジ
+            191: 'jk191', // WOWOWプライム
+            192: 'jk192', // WOWOWライブ
+            193: 'jk193', // WOWOWシネマ
+            200: 'jk200', // BS10
+            201: 'jk201', // BS10プレミアム
+            211: 'jk211', // BS11
+            222: 'jk222', // BS12
+            236: 'jk236', // BSアニマックス
+            252: 'jk252', // WOWOWプラス
+            265: 'jk265', // BSよしもと
         };
         return map[channel.serviceId] || null;
     }
 
     if (channel.channelType === 'CS') {
         const map = {
-            333: 'jk333',
+            333: 'jk333', // AT-X
         };
         return map[channel.serviceId] || null;
     }
@@ -274,6 +274,13 @@ function recoverTimingFromLog() {
         return null;
     }
 
+    /*
+     * recordedIdごとの実行ブロックを後ろから探し、
+     * 最後にbaseTime等を取得できたものを使う。
+     *
+     * XMLそのものはキャッシュせず、ここでは再取得に必要な
+     * timing情報だけを復旧する。
+     */
     const blocks = fs.readFileSync(LOG, 'utf8')
         .split('========================================');
 
@@ -438,6 +445,12 @@ function writeXml(destXml, converted) {
         }
     }
 
+    /*
+     * NX-Jikkyo側の一時的な未反映で0件が返っても、
+     * 既存の非0件XMLを破壊しない。
+     *
+     * 新規取得が非0件なら既存XMLの有無に関係なく更新する。
+     */
     if (converted.count === 0 && existingCount > 0) {
         log(`KEEP XML: ${destXml} existingComments=${existingCount} newComments=0`);
         return 'preserved';
@@ -455,9 +468,16 @@ function writeXml(destXml, converted) {
     log('========================================');
     log(`START recordedId=${recordedId}`);
 
+    /*
+     * EPGStation 録画済み番組情報
+     */
     const recorded = await getJson(
         `${EPGSTATION}/api/recorded/${recordedId}?isHalfWidth=false`
     );
+
+    /*
+     * EPGStation チャンネル情報
+     */
     const channels = await getJson(
         `${EPGSTATION}/api/channels?isHalfWidth=false`
     );
@@ -489,6 +509,13 @@ function writeXml(destXml, converted) {
 
     log(`JIKKYO ${jkId}`);
 
+    /*
+     * 録画済み番組に紐づくTSを探す。
+     *
+     * recordingFinishCommand では RECPATH が最も確実なので優先する。
+     * 手動実行やencodingFinishCommandでは、videoFilesに登録された
+     * TSファイル名から実ファイルを検索する。
+     */
     const tsInfo = (recorded.videoFiles || []).find(item => item.type === 'ts');
     let tsPath = null;
 
@@ -510,10 +537,24 @@ function writeXml(destXml, converted) {
         log('TS video file not found in recorded information');
     }
 
+    /*
+     * コメント位置補正に使う録画時刻情報を決定する。
+     *
+     * 実TSが存在する場合は、TSのdurationとmtimeから実録画時刻を
+     * 再計算してtiming.jsonへ保存する。
+     *
+     * 元TSが削除済みの場合は、保存済みtiming.json、
+     * 過去ログ、EPG上の番組時刻の順でフォールバックする。
+     */
     let timing;
 
     if (tsPath) {
         log(`TS ${tsPath}`);
+
+        /*
+         * TSが削除される前に録画時刻情報を確保する。
+         * コメント取得のWAITより先に実行することが重要。
+         */
         timing = timingFromTs(tsPath);
         saveTiming(timing);
     } else {
@@ -538,14 +579,28 @@ function writeXml(destXml, converted) {
         }
     }
 
+    /*
+     * 自動取得ではNX-Jikkyo側への反映待ちのため遅延する。
+     * timing情報は上で先に確保済みなので、WAIT中に元TSが
+     * 削除されても再取得に必要な時刻情報は失われない。
+     */
     if (delay > 0) {
         log(`WAIT ${delay} seconds`);
         await sleep(delay * 1000);
     }
 
+    /*
+     * 既存XMLの有無に関係なく、毎回NX-Jikkyoから再取得する。
+     * recordedId単位のXMLキャッシュは使用しない。
+     */
     const converted = await fetchComments(jkId, timing);
     log(`FETCH XML comments=${converted.count}`);
 
+    /*
+     * 同じ録画に紐づく実在動画すべてを更新対象にする。
+     * TS、encodingFinishCommandのOUTPUTPATH、
+     * recorded.videoFilesに登録された既存動画を重複排除して扱う。
+     */
     const targets = new Map();
     const preferredDir = tsPath ? path.dirname(tsPath) : null;
 
