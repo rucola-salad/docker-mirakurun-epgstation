@@ -64,23 +64,40 @@
                                         v-on:change="endChangeCurrentPosition"
                                         v-on:input="updateCurrentPosition"
                                     ></v-slider>
-                                    <div v-if="duration > 0 && (hasCmAnalysis || hasCmRanges || seekbarPlaybackBoundaryRanges.length > 0)" class="seekbar-analysis" aria-hidden="true">
+                                    <div
+                                        v-if="duration > 0 && (hasCmAnalysis || hasCmRanges || seekbarPlaybackBoundaryRanges.length > 0 || seekbarEditPins.length > 0)"
+                                        class="seekbar-analysis"
+                                        aria-hidden="true"
+                                    >
                                         <span
                                             v-for="range in seekbarPlaybackBoundaryRanges"
                                             :key="'boundary-' + range.key"
                                             class="seekbar-playback-boundary-range"
-                                            :style="{ left: range.left + '%', width: range.width + '%' }"
+                                            :style="{
+                                                left: range.left + '%',
+                                                width: range.width + '%',
+                                            }"
                                         ></span>
                                         <span
                                             v-for="range in seekbarCmRanges"
                                             :key="'cm-' + range.key"
                                             class="seekbar-cm-range"
-                                            :style="{ left: range.left + '%', width: range.width + '%' }"
+                                            :style="{
+                                                left: range.left + '%',
+                                                width: range.width + '%',
+                                            }"
                                         ></span>
                                         <span
                                             v-for="marker in seekbarChapterMarkers"
                                             :key="'chapter-' + marker.key"
                                             class="seekbar-chapter-marker"
+                                            :style="{ left: marker.left + '%' }"
+                                        ></span>
+                                        <span
+                                            v-for="marker in seekbarEditPins"
+                                            :key="'edit-' + marker.key"
+                                            class="seekbar-edit-pin"
+                                            v-bind:class="{ selected: marker.selected }"
                                             :style="{ left: marker.left + '%' }"
                                         ></span>
                                     </div>
@@ -126,10 +143,11 @@
                                         icon
                                         dark
                                         class="cm-skip-icon"
-                                        v-bind:class="{ disabled: isCmSkipEnabled === false }"
+                                        v-bind:class="{ disabled: isCmSkipEnabled === false || chapterEditEnabled === true }"
+                                        v-bind:disabled="chapterEditEnabled === true"
                                         aria-label="CM自動スキップ"
-                                        :aria-pressed="isCmSkipEnabled ? 'true' : 'false'"
-                                        :title="isCmSkipEnabled ? 'CM自動スキップ: ON' : 'CM自動スキップ: OFF'"
+                                        :aria-pressed="isCmSkipEnabled && chapterEditEnabled === false ? 'true' : 'false'"
+                                        :title="chapterEditEnabled === true ? 'CM自動スキップ: チャプター編集中はOFF' : (isCmSkipEnabled ? 'CM自動スキップ: ON' : 'CM自動スキップ: OFF')"
                                         v-on:click="switchCmSkip"
                                     >
                                         <v-icon>mdi-fast-forward-outline</v-icon>
@@ -149,7 +167,8 @@
                                         icon
                                         dark
                                         class="jikkyo-icon"
-                                        v-bind:class="{ disabled: isJikkyoEnabled === false }"
+                                        v-bind:class="{ disabled: isJikkyoEnabled === false || chapterEditEnabled === true }"
+                                        v-bind:disabled="chapterEditEnabled === true"
                                         v-on:click="switchJikkyo"
                                     >
                                         <v-icon>mdi-comment-text-outline</v-icon>
@@ -171,7 +190,7 @@
                 v-if="typeof jikkyoChannelId !== 'undefined'"
                 ref="jikkyo"
                 v-bind:channelId="jikkyoChannelId"
-                v-bind:enabled="isJikkyoEnabled"
+                v-bind:enabled="isJikkyoEnabled && chapterEditEnabled === false"
                 v-on:availability="onJikkyoAvailability"
             ></JikkyoOverlay>
             <RecordedJikkyoOverlay
@@ -179,7 +198,7 @@
                 ref="recordedJikkyo"
                 v-bind:videoFileId="recordedJikkyoVideoFileId"
                 v-bind:currentTime="currentTime"
-                v-bind:enabled="isJikkyoEnabled"
+                v-bind:enabled="isJikkyoEnabled && chapterEditEnabled === false"
                 v-bind:seeking="isChangingCurrentPosition"
                 v-bind:paused="isPause"
                 v-bind:playbackRate="playbackRate"
@@ -264,6 +283,7 @@
                     v-on:ratechange="onChangePlaybackRate"
                     v-on:volumechange="onVolumechange"
                 ></LiveMpegTsVideo>
+                <img v-if="chapterEditFramePreviewUrl !== null" class="chapter-edit-frame-preview" v-bind:src="chapterEditFramePreviewUrl" alt="" aria-hidden="true" />
             </div>
         </div>
     </div>
@@ -280,7 +300,7 @@ import RecordedStreamingVideo from '@/components/video/RecordedStreamingVideo.vu
 import LiveMpegTsVideo from '@/components/video/LiveMpegTsVideo.vue';
 import * as VideoParam from '@/components/video/ViedoParam';
 import container from '@/model/ModelContainer';
-import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerChapter, ICmAnalyzerCmRange } from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
+import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerChapter, ICmAnalyzerCmRange, ICmAnalyzerManualPin } from '@/model/api/cmAnalyzer/ICmAnalyzerApiModel';
 import IRecordedApiModel from '@/model/api/recorded/IRecordedApiModel';
 import { ISettingStorageModel } from '@/model/storage/setting/ISettingStorageModel';
 import UaUtil from '@/util/UaUtil';
@@ -317,6 +337,18 @@ export default class VideoContainer extends Vue {
     @Prop({ required: false })
     public recordedId: number | null | undefined;
 
+    @Prop({ required: false, default: () => [] })
+    public chapterEditPins!: ICmAnalyzerManualPin[];
+
+    @Prop({ required: false, default: null })
+    public chapterEditFrameRate!: number | null;
+
+    @Prop({ required: false, default: null })
+    public chapterEditSelectedIndex!: number | null;
+
+    @Prop({ required: false, default: false })
+    public chapterEditEnabled!: boolean;
+
     @Prop({ required: false })
     public isEnabledSpeedControl: boolean | undefined; // 速度調整が有効か
 
@@ -343,6 +375,11 @@ export default class VideoContainer extends Vue {
 
     public cmAnalysis: ICmAnalyzerAnalysis | null = null;
     public isCmSkipEnabled: boolean = this.settingStorageModel.tmp.enableCmSkipByDefault;
+
+    private chapterEditFrameCursor: number | null = null;
+    public chapterEditFramePreviewUrl: string | null = null;
+    private chapterEditFramePreviewSerial: number = 0;
+    private chapterEditFramePreviewAbortController: AbortController | null = null;
 
     private cmAnalysisLoadSerial: number = 0;
     private cmAutoSkipSuppressedUntil: number = 0;
@@ -392,6 +429,7 @@ export default class VideoContainer extends Vue {
     }
 
     public beforeDestroy(): void {
+        this.clearChapterEditFramePreview();
         document.removeEventListener('keydown', this.keyDwonListener, false);
         this.removeLivePlaybackRetryListener();
         document.removeEventListener('webkitfullscreenchange', this.fullScreenListener, false);
@@ -402,7 +440,6 @@ export default class VideoContainer extends Vue {
 
     @Watch('$route', { immediate: true, deep: true })
     public onUrlChange(): void {
-
         this.removeLivePlaybackRetryListener();
         this.isFirstPlay = true;
         this.isPlaybackPositionRestored = false;
@@ -411,6 +448,14 @@ export default class VideoContainer extends Vue {
         this.cmAnalysis = null;
         this.lastAutoSkippedCmRangeIndex = null;
         this.cmAutoSkipSuppressedUntil = 0;
+    }
+
+    @Watch('chapterEditEnabled')
+    public onChapterEditEnabledChange(enabled: boolean): void {
+        if (enabled === false) {
+            this.chapterEditFrameCursor = null;
+            this.clearChapterEditFramePreview();
+        }
     }
 
     @Watch('recordedId', { immediate: true })
@@ -431,11 +476,12 @@ export default class VideoContainer extends Vue {
         return this.getPlayableCmRanges().length > 0;
     }
 
-    public get seekbarPlaybackBoundaryRanges(): Array<{ key: string; left: number; width: number }> {
-        if (
-            this.duration <= 0 ||
-            this.cmAnalysis === null
-        ) {
+    public get seekbarPlaybackBoundaryRanges(): Array<{
+        key: string;
+        left: number;
+        width: number;
+    }> {
+        if (this.duration <= 0 || this.cmAnalysis === null) {
             return [];
         }
 
@@ -445,64 +491,40 @@ export default class VideoContainer extends Vue {
             width: number;
         }> = [];
 
-        const playbackStart =
-            this.cmAnalysis.timeline.playbackStart;
+        const playbackStart = this.cmAnalysis.timeline.playbackStart;
 
-        if (
-            typeof playbackStart === 'number' &&
-            isFinite(playbackStart) &&
-            playbackStart > 0
-        ) {
-            const endTime =
-                Math.min(
-                    playbackStart,
-                    this.duration
-                );
+        if (typeof playbackStart === 'number' && isFinite(playbackStart) && playbackStart > 0) {
+            const endTime = Math.min(playbackStart, this.duration);
 
             if (endTime > 0) {
                 ranges.push({
                     key: `head-0-${endTime}`,
                     left: 0,
-                    width:
-                        (endTime / this.duration) *
-                        100,
+                    width: (endTime / this.duration) * 100,
                 });
             }
         }
 
-        const playbackEnd =
-            this.cmAnalysis.timeline.playbackEnd;
+        const playbackEnd = this.cmAnalysis.timeline.playbackEnd;
 
-        if (
-            typeof playbackEnd === 'number' &&
-            isFinite(playbackEnd) &&
-            playbackEnd >= 0 &&
-            playbackEnd < this.duration
-        ) {
-            const startTime =
-                Math.max(
-                    0,
-                    playbackEnd
-                );
+        if (typeof playbackEnd === 'number' && isFinite(playbackEnd) && playbackEnd >= 0 && playbackEnd < this.duration) {
+            const startTime = Math.max(0, playbackEnd);
 
             ranges.push({
-                key:
-                    `tail-${startTime}-${this.duration}`,
-                left:
-                    (startTime / this.duration) *
-                    100,
-                width:
-                    (
-                        (this.duration - startTime) /
-                        this.duration
-                    ) * 100,
+                key: `tail-${startTime}-${this.duration}`,
+                left: (startTime / this.duration) * 100,
+                width: ((this.duration - startTime) / this.duration) * 100,
             });
         }
 
         return ranges;
     }
 
-    public get seekbarCmRanges(): Array<{ key: string; left: number; width: number }> {
+    public get seekbarCmRanges(): Array<{
+        key: string;
+        left: number;
+        width: number;
+    }> {
         if (this.duration <= 0) {
             return [];
         }
@@ -552,9 +574,250 @@ export default class VideoContainer extends Vue {
         return `CM ${ranges.length}区間 ` + autoText;
     }
 
+    public getChapterEditAnalysis(): ICmAnalyzerAnalysis | null {
+        return this.cmAnalysis;
+    }
+
+    public getChapterEditCurrentTime(): number {
+        return this.currentTime;
+    }
+
+    public getChapterEditDuration(): number {
+        return this.duration;
+    }
+
+    public getChapterEditFrameRate(): number | null {
+        if (
+            this.cmAnalysis !== null &&
+            this.cmAnalysis.timeline &&
+            typeof this.cmAnalysis.timeline.frameRate === 'number' &&
+            isFinite(this.cmAnalysis.timeline.frameRate) &&
+            this.cmAnalysis.timeline.frameRate > 0
+        ) {
+            return this.cmAnalysis.timeline.frameRate;
+        }
+
+        if (typeof this.chapterEditFrameRate === 'number' && isFinite(this.chapterEditFrameRate) && this.chapterEditFrameRate > 0) {
+            return this.chapterEditFrameRate;
+        }
+
+        return null;
+    }
+
+    private getChapterEditMaxFrame(frameRate: number): number {
+        /*
+         * duration はストリーム終端時刻であり、
+         * frame / frameRate による時刻 seek で実際に取得できる
+         * 最終映像フレームとは一致しない場合がある。
+         *
+         * MPEG-TS の末尾では nominal な最終フレーム付近を
+         * ffmpeg がデコードできない場合があるため、
+         * 2フレーム分を終端から除外する。
+         */
+        if (this.duration <= 0) {
+            return Number.MAX_SAFE_INTEGER;
+        }
+
+        return Math.max(0, Math.floor(this.duration * frameRate) - 2);
+    }
+
+    public getChapterEditCurrentFrame(): number | null {
+        const frameRate = this.getChapterEditFrameRate();
+
+        if (frameRate === null) {
+            return null;
+        }
+
+        const maxFrame = this.getChapterEditMaxFrame(frameRate);
+
+        if (this.chapterEditFrameCursor !== null) {
+            return Math.max(0, Math.min(this.chapterEditFrameCursor, maxFrame));
+        }
+
+        return Math.max(0, Math.min(Math.round(this.currentTime * frameRate), maxFrame));
+    }
+
+    public seekChapterEditFrame(frame: number): void {
+        const frameRate = this.getChapterEditFrameRate();
+
+        if (frameRate === null || !isFinite(frame)) {
+            return;
+        }
+
+        const maxFrame = this.getChapterEditMaxFrame(frameRate);
+
+        const targetFrame = Math.max(0, Math.min(Math.round(frame), maxFrame));
+
+        this.chapterEditFrameCursor = targetFrame;
+
+        if (typeof this.$refs.video !== 'undefined' && this.isPause === false) {
+            (this.$refs.video as BaseVideo).pause();
+        }
+
+        this.currentTime = targetFrame / frameRate;
+        this.updateTimeStr();
+        void this.showChapterEditFramePreview(targetFrame, frameRate);
+    }
+
+    private getChapterEditVideoFileId(): number | null {
+        if (this.videoParam.type === 'RecordedStreaming') {
+            return (this.videoParam as VideoParam.RecordedStreamingParam).videoFileId;
+        }
+
+        if (this.videoParam.type === 'RecordedHLS') {
+            return (this.videoParam as VideoParam.RecordedHLSParam).videoFileId;
+        }
+
+        return null;
+    }
+
+    private async showChapterEditFramePreview(frame: number, frameRate: number): Promise<void> {
+        if (this.chapterEditEnabled === false) {
+            return;
+        }
+
+        const videoFileId = this.getChapterEditVideoFileId();
+
+        if (videoFileId === null) {
+            return;
+        }
+
+        const serial = ++this.chapterEditFramePreviewSerial;
+
+        if (this.chapterEditFramePreviewAbortController !== null) {
+            this.chapterEditFramePreviewAbortController.abort();
+        }
+
+        const controller = new AbortController();
+        this.chapterEditFramePreviewAbortController = controller;
+
+        try {
+            const response = await fetch(`/api/videos/${videoFileId}/frame-preview?frame=${encodeURIComponent(String(frame))}&frameRate=${encodeURIComponent(String(frameRate))}`, {
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+
+            if (!response.ok) {
+                throw new Error(`frame preview failed: HTTP ${response.status}`);
+            }
+
+            const blob = await response.blob();
+
+            if (serial !== this.chapterEditFramePreviewSerial) {
+                return;
+            }
+
+            const objectUrl = URL.createObjectURL(blob);
+            const oldObjectUrl = this.chapterEditFramePreviewUrl;
+
+            this.chapterEditFramePreviewUrl = objectUrl;
+
+            if (oldObjectUrl !== null) {
+                URL.revokeObjectURL(oldObjectUrl);
+            }
+        } catch (err) {
+            if (controller.signal.aborted === false) {
+                console.error('chapter edit frame preview failed', err);
+            }
+        } finally {
+            if (this.chapterEditFramePreviewAbortController === controller) {
+                this.chapterEditFramePreviewAbortController = null;
+            }
+        }
+    }
+
+    private clearChapterEditFramePreview(): void {
+        ++this.chapterEditFramePreviewSerial;
+
+        if (this.chapterEditFramePreviewAbortController !== null) {
+            this.chapterEditFramePreviewAbortController.abort();
+            this.chapterEditFramePreviewAbortController = null;
+        }
+
+        if (this.chapterEditFramePreviewUrl !== null) {
+            URL.revokeObjectURL(this.chapterEditFramePreviewUrl);
+            this.chapterEditFramePreviewUrl = null;
+        }
+    }
+
+    public stepChapterEditFrame(delta: number, updatePreview: boolean = true): void {
+        const frameRate = this.getChapterEditFrameRate();
+
+        if (frameRate === null) {
+            return;
+        }
+
+        if (this.chapterEditFrameCursor === null) {
+            this.chapterEditFrameCursor = Math.max(0, Math.round(this.currentTime * frameRate));
+        }
+
+        const maxFrame = this.getChapterEditMaxFrame(frameRate);
+        const targetFrame = Math.max(0, Math.min(this.chapterEditFrameCursor + delta, maxFrame));
+
+        this.chapterEditFrameCursor = targetFrame;
+
+        if (typeof this.$refs.video !== 'undefined' && this.isPause === false) {
+            (this.$refs.video as BaseVideo).pause();
+        }
+
+        this.currentTime = targetFrame / frameRate;
+        this.updateTimeStr();
+
+        if (updatePreview) {
+            void this.showChapterEditFramePreview(targetFrame, frameRate);
+        }
+    }
+
+    public refreshChapterEditFramePreview(): void {
+        const frameRate = this.getChapterEditFrameRate();
+
+        if (frameRate === null) {
+            return;
+        }
+
+        const frame = this.getChapterEditCurrentFrame();
+
+        if (frame === null) {
+            return;
+        }
+
+        void this.showChapterEditFramePreview(frame, frameRate);
+    }
+
+    public async reloadChapterEditAnalysis(): Promise<void> {
+        await this.loadCmAnalysis();
+    }
+
+    public get seekbarEditPins(): Array<{
+        key: string;
+        left: number;
+        selected: boolean;
+        type: string;
+    }> {
+        if (this.duration <= 0 || !Array.isArray(this.chapterEditPins) || this.chapterEditPins.length === 0) {
+            return [];
+        }
+
+        const frameRate = this.getChapterEditFrameRate();
+
+        if (frameRate === null) {
+            return [];
+        }
+
+        return this.chapterEditPins.map((pin, index) => {
+            const time = pin.frame / frameRate;
+
+            return {
+                key: `${index}-${pin.type}-${pin.frame}`,
+                left: Math.max(0, Math.min(100, (time / this.duration) * 100)),
+                selected: this.chapterEditSelectedIndex === index,
+                type: pin.type,
+            };
+        });
+    }
+
     private async loadCmAnalysis(): Promise<void> {
         const serial = ++this.cmAnalysisLoadSerial;
-
 
         this.cmAnalysis = null;
         this.lastAutoSkippedCmRangeIndex = null;
@@ -590,7 +853,6 @@ export default class VideoContainer extends Vue {
 
             this.cmAnalysis = analysis;
             this.restorePlaybackPosition();
-
         } catch (err) {
             if (serial !== this.cmAnalysisLoadSerial) {
                 return;
@@ -687,13 +949,8 @@ export default class VideoContainer extends Vue {
 
         const nextChapterIndex = currentChapterIndex + 1;
 
-        if (
-            nextChapterIndex >= 0 &&
-            nextChapterIndex < chapters.length
-        ) {
-            this.seekPlaybackTime(
-                chapters[nextChapterIndex].time
-            );
+        if (nextChapterIndex >= 0 && nextChapterIndex < chapters.length) {
+            this.seekPlaybackTime(chapters[nextChapterIndex].time);
         }
     }
 
@@ -709,6 +966,8 @@ export default class VideoContainer extends Vue {
 
     private maybeStopAtPlaybackEnd(): boolean {
         if (
+            this.chapterEditEnabled === true ||
+            this.isCmSkipEnabled === false ||
             this.cmAnalysis === null ||
             typeof this.cmAnalysis.timeline.playbackEnd !== 'number' ||
             !isFinite(this.cmAnalysis.timeline.playbackEnd) ||
@@ -718,13 +977,9 @@ export default class VideoContainer extends Vue {
             return false;
         }
 
-        const playbackEnd =
-            this.cmAnalysis.timeline.playbackEnd;
+        const playbackEnd = this.cmAnalysis.timeline.playbackEnd;
 
-        if (
-            this.currentTime < playbackEnd ||
-            (this.$refs.video as BaseVideo).paused() === true
-        ) {
+        if (this.currentTime < playbackEnd || (this.$refs.video as BaseVideo).paused() === true) {
             return false;
         }
 
@@ -733,9 +988,9 @@ export default class VideoContainer extends Vue {
          * 手動シーク自体は playbackEnd より後も許可する。
          */
         (this.$refs.video as BaseVideo).pause();
-        (this.$refs.video as BaseVideo).setCurrentTime(playbackEnd);
-        this.currentTime = playbackEnd;
-        this.syncRecordedJikkyoSeek(playbackEnd);
+        (this.$refs.video as BaseVideo).setCurrentTime(0);
+        this.currentTime = 0;
+        this.syncRecordedJikkyoSeek(0);
         this.updateTimeStr();
         this.clearPlaybackPosition();
 
@@ -744,6 +999,7 @@ export default class VideoContainer extends Vue {
 
     private maybeAutoSkipCm(): void {
         if (
+            this.chapterEditEnabled === true ||
             this.isCmSkipEnabled === false ||
             this.isChangingCurrentPosition === true ||
             new Date().getTime() < this.cmAutoSkipSuppressedUntil ||
@@ -918,7 +1174,11 @@ export default class VideoContainer extends Vue {
     public onTimeupdate(): void {
         const duration = this.getVideoDuration();
         this.duration = duration;
-        this.currentTime = this.getVideoCurrentTime();
+
+        if (this.chapterEditEnabled === false || this.chapterEditFrameCursor === null) {
+            this.currentTime = this.getVideoCurrentTime();
+        }
+
         this.updateTimeStr();
         this.updateSubtitleState();
 
@@ -996,12 +1256,10 @@ export default class VideoContainer extends Vue {
 
     // 読み込み完了
     public onLoadeddata(): void {
-
         this.isLoading = false;
         this.forceUpdateSubtitle();
         this.updateSubtitleState();
         this.restorePlaybackPosition();
-
     }
 
     /**
@@ -1009,28 +1267,19 @@ export default class VideoContainer extends Vue {
      * 初期復元位置を canplay 後に一度だけ保証する。
      */
     private async applyPendingInitialPlaybackPosition(): Promise<void> {
-        if (
-            this.pendingInitialPlaybackPosition === null ||
-            typeof this.$refs.video === 'undefined'
-        ) {
+        if (this.pendingInitialPlaybackPosition === null || typeof this.$refs.video === 'undefined') {
             return;
         }
 
-        const target =
-            this.pendingInitialPlaybackPosition;
+        const target = this.pendingInitialPlaybackPosition;
 
-        const current =
-            this.getVideoCurrentTime();
-
+        const current = this.getVideoCurrentTime();
 
         /*
          * HLS では初期シークによってストリームが再生成される場合がある。
          * その場合は次の canplay まで pending を保持する。
          */
-        if (
-            !isFinite(current) ||
-            Math.abs(current - target) > 0.25
-        ) {
+        if (!isFinite(current) || Math.abs(current - target) > 0.25) {
             (this.$refs.video as BaseVideo).setCurrentTime(target);
             this.currentTime = target;
             this.syncRecordedJikkyoSeek(target);
@@ -1049,10 +1298,7 @@ export default class VideoContainer extends Vue {
             try {
                 await (this.$refs.video as BaseVideo).play();
             } catch (err) {
-                if (
-                    !(err instanceof DOMException) ||
-                    err.name !== 'NotAllowedError'
-                ) {
+                if (!(err instanceof DOMException) || err.name !== 'NotAllowedError') {
                     console.error(err);
                 }
             }
@@ -1061,7 +1307,6 @@ export default class VideoContainer extends Vue {
 
     // 再生可能
     public async onCanplay(): Promise<void> {
-
         this.isLoading = false;
 
         await this.applyPendingInitialPlaybackPosition();
@@ -1116,6 +1361,14 @@ export default class VideoContainer extends Vue {
     public onEnded(): void {
         this.isLoading = false;
         this.clearPlaybackPosition();
+
+        if (this.isLive === false && typeof this.$refs.video !== 'undefined') {
+            (this.$refs.video as BaseVideo).pause();
+            (this.$refs.video as BaseVideo).setCurrentTime(0);
+            this.currentTime = 0;
+            this.syncRecordedJikkyoSeek(0);
+            this.updateTimeStr();
+        }
     }
 
     // 再生
@@ -1136,6 +1389,8 @@ export default class VideoContainer extends Vue {
             return;
         }
 
+        this.chapterEditFrameCursor = null;
+        this.clearChapterEditFramePreview();
         this.isChangingCurrentPosition = true;
 
         // 後で再生状態を戻すために保存
@@ -1163,7 +1418,7 @@ export default class VideoContainer extends Vue {
 
         // シーク前に再生中であれば再開
         await Util.sleep(200);
-        if (this.needsReplay === true) {
+        if (this.needsReplay === true && this.chapterEditEnabled === false) {
             await (this.$refs.video as BaseVideo).play().catch(err => {
                 console.error(err);
             });
@@ -1288,6 +1543,18 @@ export default class VideoContainer extends Vue {
         }
 
         if ((this.$refs.video as BaseVideo).paused() === true) {
+            if (this.chapterEditEnabled === true && this.chapterEditFrameCursor !== null) {
+                const frameRate = this.getChapterEditFrameRate();
+
+                if (frameRate !== null) {
+                    this.seekPlaybackTime(this.chapterEditFrameCursor / frameRate);
+                }
+
+                this.chapterEditFrameCursor = null;
+            }
+
+            this.clearChapterEditFramePreview();
+
             await (this.$refs.video as BaseVideo).play().catch(err => {
                 console.error(err);
             });
@@ -1433,49 +1700,51 @@ export default class VideoContainer extends Vue {
     }
 
     private restorePlaybackPosition(): void {
-        if (
-            this.isPlaybackPositionRestored === true ||
-            typeof this.$refs.video === 'undefined'
-        ) {
+        if (this.isPlaybackPositionRestored === true || typeof this.$refs.video === 'undefined') {
             return;
         }
 
-        const key =
-            this.getPlaybackPositionKey();
+        const key = this.getPlaybackPositionKey();
 
         if (key === null) {
             return;
         }
 
-        const saved =
-            localStorage.getItem(key);
+        const saved = localStorage.getItem(key);
 
         if (saved !== null) {
-            const time =
-                Number(saved);
+            const time = Number(saved);
 
-            const duration =
-                this.getVideoDuration();
-
-            if (
-                isFinite(time) &&
-                time >= 5 &&
-                isFinite(duration) &&
-                duration > 0 &&
-                duration - time > 30
-            ) {
-                this.isPlaybackPositionRestored = true;
-                this.pendingInitialPlaybackPosition = time;
-
-                (this.$refs.video as BaseVideo).setCurrentTime(time);
-                this.currentTime = time;
-                this.updateTimeStr();
-                this.syncRecordedJikkyoSeek(time);
-                this.updateLastSeekTime();
+            if (!isFinite(time) || time < 5) {
+                localStorage.removeItem(key);
                 return;
             }
 
-            localStorage.removeItem(key);
+            const duration = this.getVideoDuration();
+
+            /*
+             * loadeddata / CM解析取得の順序によっては、
+             * 初回呼び出し時点では duration がまだ確定していない。
+             * この場合は保存位置を削除せず、後続イベントで再試行する。
+             */
+            if (!isFinite(duration) || duration <= 0) {
+                return;
+            }
+
+            if (duration - time <= 30) {
+                localStorage.removeItem(key);
+                return;
+            }
+
+            this.isPlaybackPositionRestored = true;
+            this.pendingInitialPlaybackPosition = time;
+
+            (this.$refs.video as BaseVideo).setCurrentTime(time);
+            this.currentTime = time;
+            this.updateTimeStr();
+            this.syncRecordedJikkyoSeek(time);
+            this.updateLastSeekTime();
+            return;
         }
 
         /*
@@ -1484,21 +1753,13 @@ export default class VideoContainer extends Vue {
          * 解析取得より loadeddata が先に発生する場合があるため、
          * cmAnalysis がまだ無ければ restored にせず、解析取得後に再試行する。
          */
-        if (
-            this.cmAnalysis === null ||
-            typeof this.cmAnalysis.timeline.playbackStart !== 'number' ||
-            !isFinite(this.cmAnalysis.timeline.playbackStart)
-        ) {
+        if (this.cmAnalysis === null || typeof this.cmAnalysis.timeline.playbackStart !== 'number' || !isFinite(this.cmAnalysis.timeline.playbackStart)) {
             return;
         }
 
         this.isPlaybackPositionRestored = true;
 
-        const playbackStart =
-            Math.max(
-                0,
-                this.cmAnalysis.timeline.playbackStart
-            );
+        const playbackStart = Math.max(0, this.cmAnalysis.timeline.playbackStart);
 
         this.pendingInitialPlaybackPosition = playbackStart;
 
@@ -1830,6 +2091,18 @@ export default class VideoContainer extends Vue {
         width: 100%
         height: 100%
 
+        .chapter-edit-frame-preview
+            position: absolute
+            top: 0
+            right: 0
+            bottom: 0
+            left: 0
+            width: 100%
+            height: 100%
+            object-fit: contain
+            pointer-events: none
+            z-index: 2
+
         video
             width: 100%
             height: 100%
@@ -1856,6 +2129,21 @@ export default class VideoContainer extends Vue {
             .video-wrap
                 width: 100%
                 max-height: 56.18vw
+
+.seekbar-edit-pin
+    position: absolute
+    top: 0
+    bottom: 0
+    width: 2px
+    background: #ffcc00
+    transform: translateX(-1px)
+    z-index: 8
+    pointer-events: none
+
+    &.selected
+        width: 4px
+        background: #ff5252
+        transform: translateX(-2px)
 </style>
 
 <style lang="sass">

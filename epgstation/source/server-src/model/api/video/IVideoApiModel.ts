@@ -12,5 +12,6 @@ export default interface IVideoApiModel {
     deleteVideoFile(videoFileId: apid.VideoFileId): Promise<void>;
     getDuration(videoFileId: apid.VideoFileId): Promise<number>;
     getMediaInfo(videoFileId: apid.VideoFileId): Promise<apid.VideoMediaInfo>;
+    getFramePreview(videoFileId: apid.VideoFileId, frame: number, frameRate: number): Promise<Buffer>;
     sendToKodi(host: string, isSecure: boolean, kodiName: string, videoFileId: apid.VideoFileId): Promise<void>;
 }

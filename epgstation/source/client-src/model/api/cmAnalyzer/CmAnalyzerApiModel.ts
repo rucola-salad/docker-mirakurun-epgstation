@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify';
 import IRepositoryModel from '../IRepositoryModel';
-import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerLogo } from './ICmAnalyzerApiModel';
+import ICmAnalyzerApiModel, { ICmAnalyzerAnalysis, ICmAnalyzerLogo, ICmAnalyzerManualPin } from './ICmAnalyzerApiModel';
 
 @injectable()
 export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
@@ -41,5 +41,24 @@ export default class CmAnalyzerApiModel implements ICmAnalyzerApiModel {
 
             throw err;
         }
+    }
+    public async saveManualTimeline(recordedId: number, frameRate: number, duration: number, pins: ICmAnalyzerManualPin[]): Promise<ICmAnalyzerAnalysis> {
+        const result = await this.repository.post(`/cm-analyzer/analysis/${recordedId.toString(10)}`, {
+            frameRate,
+            duration,
+            pins,
+        });
+
+        return result.data as ICmAnalyzerAnalysis;
+    }
+
+    public async restoreAutomaticAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null> {
+        const result = await this.repository.delete(`/cm-analyzer/analysis/${recordedId.toString(10)}`);
+
+        if (result.data && result.data.analysis) {
+            return result.data.analysis as ICmAnalyzerAnalysis;
+        }
+
+        return null;
     }
 }

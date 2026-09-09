@@ -211,6 +211,64 @@ export default class VideoApiModel implements IVideoApiModel {
         };
     }
 
+    /**
+     * 手動チャプター編集用のフレームプレビュー画像を取得する
+     *
+     * NOTE:
+     * 現段階では chapter frame を frameRate による時刻へ変換している。
+     * source frame / PTS との厳密な対応は別途検証する。
+     */
+    public async getFramePreview(videoFileId: apid.VideoFileId, frame: number, frameRate: number): Promise<Buffer> {
+        if (!Number.isInteger(frame) || frame < 0 || !Number.isFinite(frameRate) || frameRate <= 0) {
+            throw new Error('InvalidFramePreviewParameter');
+        }
+
+        const filePath = await this.videoUtil.getFullFilePathFromId(videoFileId);
+        if (filePath === null) {
+            throw new Error('VideoFileIsUndefined');
+        }
+
+        const time = frame / frameRate;
+
+        const execFileAsync = promisify(execFile);
+        const { stdout } = await execFileAsync(
+            process.env.FFMPEG_PATH || 'ffmpeg',
+            [
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-ss',
+                time.toFixed(9),
+                '-i',
+                filePath,
+                '-map',
+                '0:v:0',
+                '-vf',
+                'scale=trunc(iw*sar/2)*2:ih,setsar=1',
+                '-frames:v',
+                '1',
+                '-an',
+                '-sn',
+                '-f',
+                'image2pipe',
+                '-vcodec',
+                'mjpeg',
+                'pipe:1',
+            ],
+            {
+                encoding: 'buffer',
+                maxBuffer: 16 * 1024 * 1024,
+                timeout: 15000,
+            },
+        );
+
+        if (!Buffer.isBuffer(stdout) || stdout.length === 0) {
+            throw new Error('FramePreviewIsEmpty');
+        }
+
+        return stdout;
+    }
+
     public async sendToKodi(
         host: string,
         isSecure: boolean,

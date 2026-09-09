@@ -1,11 +1,4 @@
-export type CmAnalyzerLogoStatus =
-    'unknown' |
-    'missing' |
-    'improving' |
-    'good' |
-    'backoff' |
-    'suspended' |
-    'unsupported';
+export type CmAnalyzerLogoStatus = 'unknown' | 'missing' | 'improving' | 'good' | 'backoff' | 'suspended' | 'unsupported';
 
 export interface ICmAnalyzerLogo {
     stationId: string | null;
@@ -43,11 +36,7 @@ export interface ICmAnalyzerKeepRange {
     endFrame: number;
 }
 
-export type CmAnalyzerCutRangeKind =
-    'head' |
-    'cm' |
-    'other' |
-    'tail';
+export type CmAnalyzerCutRangeKind = 'head' | 'cm' | 'other' | 'tail';
 
 export interface ICmAnalyzerCutRange {
     startFrame: number;
@@ -55,6 +44,22 @@ export interface ICmAnalyzerCutRange {
     startTime: number;
     endTime: number;
     kind: CmAnalyzerCutRangeKind;
+}
+
+export type CmAnalyzerManualPinType = 'chapter' | 'main-start' | 'cm-start' | 'cm-end' | 'main-end';
+
+export interface ICmAnalyzerManualPin {
+    frame: number;
+    type: CmAnalyzerManualPinType;
+}
+
+export interface ICmAnalyzerManualTimeline {
+    active: boolean;
+    hasAutomaticAnalysis: boolean;
+    frameRate?: number;
+    duration?: number | null;
+    pins: ICmAnalyzerManualPin[];
+    savedAt?: string | null;
 }
 
 export interface ICmAnalyzerAnalysis {
@@ -71,10 +76,13 @@ export interface ICmAnalyzerAnalysis {
         playbackStart?: number;
         playbackEnd?: number;
     };
+    manualTimeline?: ICmAnalyzerManualTimeline;
 }
 
 export default interface ICmAnalyzerApiModel {
     getLogos(): Promise<ICmAnalyzerLogo[]>;
     deleteLogo(stationId: string): Promise<void>;
     getAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null>;
+    saveManualTimeline(recordedId: number, frameRate: number, duration: number, pins: ICmAnalyzerManualPin[]): Promise<ICmAnalyzerAnalysis>;
+    restoreAutomaticAnalysis(recordedId: number): Promise<ICmAnalyzerAnalysis | null>;
 }

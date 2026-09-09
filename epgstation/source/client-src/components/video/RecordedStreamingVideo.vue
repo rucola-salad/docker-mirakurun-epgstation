@@ -128,6 +128,28 @@ export default class RecordedStreamingVideo extends BaseVideo {
     }
 
     /**
+     * 遅延シーク中の再生要求を、シーク完了後の復元状態にも反映する
+     */
+    public async play(): Promise<void> {
+        if (this.dummyPlayPosition !== null) {
+            this.pauseStateBeforeCurrentTime = false;
+        }
+
+        await super.play();
+    }
+
+    /**
+     * 遅延シーク中の停止要求を、シーク完了後の復元状態にも反映する
+     */
+    public pause(): void {
+        if (this.dummyPlayPosition !== null) {
+            this.pauseStateBeforeCurrentTime = true;
+        }
+
+        super.pause();
+    }
+
+    /**
      * 再生位置設定
      * @param time: number (秒)
      */
