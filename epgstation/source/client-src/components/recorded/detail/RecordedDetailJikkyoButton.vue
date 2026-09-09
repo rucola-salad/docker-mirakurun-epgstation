@@ -5,10 +5,10 @@
         v-on:click="generateJikkyo"
         class="ma-1"
         :loading="isGenerating"
-        :disabled="isGenerating || hasJikkyo"
+        :disabled="isGenerating"
     >
         <v-icon left dark>mdi-comment-text-outline</v-icon>
-        実況XML生成
+        {{ hasJikkyo ? '実況XML再取得' : '実況XML取得' }}
     </v-btn>
 </template>
 

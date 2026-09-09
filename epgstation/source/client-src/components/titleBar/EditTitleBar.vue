@@ -22,7 +22,7 @@
                     <v-icon>mdi-comment-text-outline</v-icon>
                 </v-btn>
             </template>
-            <span>実況XML生成</span>
+            <span>実況XML取得</span>
         </v-tooltip>
         <v-tooltip v-if="isShowRepair === true" bottom>
             <template v-slot:activator="{ on }">

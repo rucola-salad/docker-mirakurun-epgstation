@@ -419,6 +419,11 @@ export interface VideoFile {
 
 export interface GenerateJikkyoResult {
   status: "created" | "exists";
+  comments: number;
+  updated: number;
+  preserved: number;
+  stdout: string;
+  stderr: string;
 }
 
 /**

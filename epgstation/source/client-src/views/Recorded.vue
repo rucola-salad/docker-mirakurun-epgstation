@@ -303,13 +303,13 @@ export default class Recorded extends Vue {
         this.isOpenMultipleJikkyoDialog = true;
     }
 
-    public onMultipleJikkyoComplete(result: { created: number; exists: number; failed: number }): void {
+    public onMultipleJikkyoComplete(result: { updated: number; preserved: number; failed: number }): void {
         this.isOpenMultipleJikkyoDialog = false;
         this.isEditMode = false;
         this.recordedState.clearSelect();
         this.snackbarState.open({
             color: result.failed === 0 ? 'success' : 'error',
-            text: `実況XML生成結果: 新規 ${result.created} 件 / 既存 ${result.exists} 件 / 失敗 ${result.failed} 件`,
+            text: `実況XML取得結果: 更新 ${result.updated} 件 / 既存保持 ${result.preserved} 件 / 失敗 ${result.failed} 件`,
         });
         this.recordedState.fetchData(this.createFetchDataOption()).catch(err => console.error(err));
     }

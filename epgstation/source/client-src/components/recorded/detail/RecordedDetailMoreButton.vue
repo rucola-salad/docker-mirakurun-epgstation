@@ -27,9 +27,11 @@
                     <v-list-item-icon class="mr-3"><v-icon>mdi-format-list-bulleted</v-icon></v-list-item-icon>
                     <v-list-item-content><v-list-item-title>チャプター再作成</v-list-item-title></v-list-item-content>
                 </v-list-item>
-                <v-list-item v-if="recordedItem.isRecording === false" :disabled="isGeneratingJikkyo || hasJikkyo" v-on:click="generateJikkyo">
+                <v-list-item v-if="recordedItem.isRecording === false" :disabled="isGeneratingJikkyo" v-on:click="generateJikkyo">
                     <v-list-item-icon class="mr-3"><v-icon>mdi-comment-text-outline</v-icon></v-list-item-icon>
-                    <v-list-item-content><v-list-item-title>実況XML生成</v-list-item-title></v-list-item-content>
+                    <v-list-item-content>
+                        <v-list-item-title>{{ hasJikkyo ? '実況XML再取得' : '実況XML取得' }}</v-list-item-title>
+                    </v-list-item-content>
                 </v-list-item>
                 <v-list-item v-if="recordedItem.isProtected === true" v-on:click="unprotect">
                     <v-list-item-icon class="mr-3"><v-icon>mdi-lock-open</v-icon></v-list-item-icon>
@@ -155,7 +157,7 @@ export default class RecordedDetailMoreButton extends Vue {
     }
 
     public generateJikkyo(): void {
-        if (this.isGeneratingJikkyo || this.hasJikkyo) {
+        if (this.isGeneratingJikkyo) {
             return;
         }
         this.isOpened = false;

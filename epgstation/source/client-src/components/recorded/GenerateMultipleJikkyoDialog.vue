@@ -1,18 +1,18 @@
 <template>
     <v-dialog v-model="dialogModel" max-width="600" persistent>
         <v-card>
-            <v-card-title>実況XML一括生成</v-card-title>
+            <v-card-title>実況XML一括取得</v-card-title>
 
             <v-card-text v-if="result === null">
-                選択した {{ recorded.length }} 件の実況XMLを生成します。
-                <div class="caption mt-2">既にXMLが存在する録画はそのままスキップされます。</div>
+                選択した {{ recorded.length }} 件の実況XMLを取得します。
+                <div class="caption mt-2">既にXMLが存在する録画も再取得します。取得結果が0件の場合は既存の非0件XMLを保持します。</div>
             </v-card-text>
 
             <v-card-text v-else>
-                <div class="subtitle-1 font-weight-bold mb-2">実況XML生成結果</div>
+                <div class="subtitle-1 font-weight-bold mb-2">実況XML取得結果</div>
 
-                <div>作成: {{ result.created }} 件</div>
-                <div>既存: {{ result.exists }} 件</div>
+                <div>更新: {{ result.updated }} 件</div>
+                <div>既存保持: {{ result.preserved }} 件</div>
                 <div>失敗: {{ result.failed }} 件</div>
 
                 <div v-if="result.failures.length > 0" class="mt-4">
@@ -28,7 +28,7 @@
                 <template v-if="result === null">
                     <v-btn text color="error" :disabled="isGenerating === true" v-on:click="cancel">キャンセル</v-btn>
 
-                    <v-btn text color="primary" :loading="isGenerating === true" :disabled="recorded.length === 0" v-on:click="generate">{{ recorded.length }} 件を生成</v-btn>
+                    <v-btn text color="primary" :loading="isGenerating === true" :disabled="recorded.length === 0" v-on:click="generate">{{ recorded.length }} 件を取得</v-btn>
                 </template>
 
                 <v-btn v-else text color="primary" v-on:click="closeResult">閉じる</v-btn>
@@ -49,8 +49,8 @@ interface JikkyoFailure {
 }
 
 interface JikkyoGenerateResult {
-    created: number;
-    exists: number;
+    updated: number;
+    preserved: number;
     failed: number;
     failures: JikkyoFailure[];
 }
@@ -101,8 +101,8 @@ export default class GenerateMultipleJikkyoDialog extends Vue {
 
         this.dialogModel = false;
         this.$emit('complete', {
-            created: result.created,
-            exists: result.exists,
+            updated: result.updated,
+            preserved: result.preserved,
             failed: result.failed,
         });
     }
@@ -114,21 +114,21 @@ export default class GenerateMultipleJikkyoDialog extends Vue {
 
         this.isGenerating = true;
 
-        let created = 0;
-        let exists = 0;
+        let updated = 0;
+        let preserved = 0;
         const failures: JikkyoFailure[] = [];
 
         for (const r of this.recorded) {
             try {
                 const result = await this.recordedApiModel.generateJikkyo(r.recordedItem.id);
 
-                if (result.status === 'created') {
-                    created++;
-                } else {
-                    exists++;
+                if (result.updated > 0) {
+                    updated++;
+                } else if (result.preserved > 0) {
+                    preserved++;
                 }
             } catch (err) {
-                console.error(`jikkyo generation failed: recordedId=${r.recordedItem.id}`, err);
+                console.error(`jikkyo fetch failed: recordedId=${r.recordedItem.id}`, err);
 
                 failures.push({
                     recordedId: r.recordedItem.id,
@@ -138,8 +138,8 @@ export default class GenerateMultipleJikkyoDialog extends Vue {
         }
 
         this.result = {
-            created,
-            exists,
+            updated,
+            preserved,
             failed: failures.length,
             failures,
         };
@@ -162,7 +162,7 @@ export default class GenerateMultipleJikkyoDialog extends Vue {
             return error.message;
         }
 
-        return '実況XML生成に失敗しました';
+        return '実況XML取得に失敗しました';
     }
 }
 </script>

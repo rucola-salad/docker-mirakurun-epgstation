@@ -249,14 +249,20 @@ export default class RecordedDetail extends Vue {
         this.isGeneratingJikkyo = true;
         try {
             const result = await this.recordedApiModel.generateJikkyo(recorded.recordedItem.id);
+            let message = `実況XMLを取得しました（コメント ${result.comments} 件 / 更新 ${result.updated} ファイル）`;
+
+            if (result.updated === 0 && result.preserved > 0) {
+                message = `実況コメントは0件でした。既存XMLを保持しました（${result.preserved} ファイル）`;
+            }
+
             this.snackbarState.open({
                 color: 'success',
-                text: result.status === 'created' ? '実況XMLを生成しました' : '実況XMLは既に存在します',
+                text: message,
             });
             await this.fetchData();
         } catch (err) {
             console.error(err);
-            this.snackbarState.open({ color: 'error', text: '実況XML生成に失敗しました' });
+            this.snackbarState.open({ color: 'error', text: '実況XML取得に失敗しました' });
         } finally {
             this.isGeneratingJikkyo = false;
         }
