@@ -205,11 +205,12 @@ export default class RecordedJikkyoOverlay extends Vue {
         const color = this.getCommentColor(commands);
         const id = ++this.commentSequence;
         const lifetime = position === 'naka' ? 8000 : 4000;
-        const lane = this.laneSequence++ % 11;
+        const laneCount = position === 'naka' ? 22 : 11;
+        const lane = this.laneSequence++ % laneCount;
         const style: { [key: string]: string | number } = { color: color, fontSize: `${fontSize}px` };
 
         if (position === 'naka') {
-            style.top = `${4 + lane * 8}%`;
+            style.top = `${3 + lane * 4.2}%`;
             style.animationDuration = `${lifetime / 1000}s`;
         } else if (position === 'ue') {
             style.top = `${3 + (lane % 5) * 8}%`;
