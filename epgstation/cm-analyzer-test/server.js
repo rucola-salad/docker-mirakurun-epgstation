@@ -1481,7 +1481,6 @@ function buildAnalysis(outputRoot, metadata) {
         );
 
     for (const required of [
-        chapterPath,
         jlscpPath,
         cutPath,
     ]) {
@@ -1493,10 +1492,12 @@ function buildAnalysis(outputRoot, metadata) {
     }
 
     const chapters =
-        normalizeJlseChapters(
-            parseChapters(chapterPath),
-            metadata.videoFps
-        );
+        isUsableFile(chapterPath)
+            ? normalizeJlseChapters(
+                parseChapters(chapterPath),
+                metadata.videoFps
+            )
+            : [];
 
     const {
         segments,
