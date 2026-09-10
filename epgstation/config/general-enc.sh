@@ -12,7 +12,6 @@ fi
 FFMPEG="${FFMPEG:-/opt/ffmpeg-7.0.2/bin/ffmpeg}"
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD128}"
 
-export LIBVA_DRIVER_NAME=i965
 
 exec "$FFMPEG" \
     -y \
