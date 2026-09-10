@@ -17,6 +17,7 @@ if (!timelineText) {
 
 const timeline = JSON.parse(timelineText);
 const frameRate = Number(timeline.frameRate);
+const videoStartTime = Number(process.env.CM_VIDEO_START_TIME);
 const chapters = Array.isArray(timeline.chapters)
     ? timeline.chapters
     : [];
@@ -26,6 +27,10 @@ const keepRanges = Array.isArray(timeline.keepRanges)
 
 if (!Number.isFinite(frameRate) || frameRate <= 0) {
     throw new Error('InvalidTimelineFrameRate');
+}
+
+if (cmCut && (!Number.isFinite(videoStartTime) || videoStartTime < 0)) {
+    throw new Error('InvalidVideoStartTime');
 }
 
 const unique = values => {
@@ -95,15 +100,25 @@ if (!cmCut) {
     );
 
     normalized.forEach((range, i) => {
-        const start = range.startFrame / frameRate;
-        const end = (range.endFrame + 1) / frameRate;
+        /*
+         * Video ranges use CM Analyzer's decoded-frame numbers.
+         * keepRanges endFrame is inclusive, while FFmpeg end_frame is exclusive.
+         *
+         * Audio must be cut at the PTS of the corresponding video frame.
+         * MPEG-TS decoded video does not necessarily start at PTS 0, so
+         * frame / frameRate alone is not sufficient.
+         */
+        const audioStart =
+            videoStartTime + range.startFrame / frameRate;
+        const audioEnd =
+            videoStartTime + (range.endFrame + 1) / frameRate;
 
         filters.push(
-            `[vsrc${i}]trim=start=${start}:end=${end},setpts=PTS-STARTPTS` +
+            `[vsrc${i}]trim=start_frame=${range.startFrame}:end_frame=${range.endFrame + 1},setpts=PTS-STARTPTS` +
             `${filterFieldmatch ? ',fieldmatch=order=tff' : ''}[v${i}]`
         );
         filters.push(
-            `[asrc${i}]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a${i}]`
+            `[asrc${i}]atrim=start=${audioStart}:end=${audioEnd},asetpts=PTS-STARTPTS[a${i}]`
         );
 
         concatInputs.push(`[v${i}][a${i}]`);

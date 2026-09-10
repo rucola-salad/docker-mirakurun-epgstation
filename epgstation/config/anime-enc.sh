@@ -28,6 +28,33 @@ trap cleanup EXIT INT TERM
 
 HELPER_JSON=""
 
+if [ "${CM_CUT:-0}" = "1" ]; then
+    CM_VIDEO_START_TIME="$(
+        "$FFMPEG" \
+            -hide_banner \
+            -loglevel info \
+            -i "$INPUT" \
+            -map 0:v:0 \
+            -vf showinfo \
+            -frames:v 1 \
+            -an \
+            -f null - \
+            2>&1 |
+        sed -n \
+            's/.*n:[[:space:]]*0[[:space:]].*pts_time:\([^ ]*\).*/\1/p' |
+        head -n 1
+    )"
+
+    if [ -z "$CM_VIDEO_START_TIME" ]; then
+        echo "Failed to determine first decoded video frame PTS." >&2
+        exit 1
+    fi
+
+    export CM_VIDEO_START_TIME
+
+    echo "CM video first frame PTS: $CM_VIDEO_START_TIME" >&2
+fi
+
 if [ -n "${CM_TIMELINE:-}" ]; then
     HELPER_JSON="$(node "$HELPER")"
 fi
