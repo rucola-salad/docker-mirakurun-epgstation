@@ -216,7 +216,7 @@ class EncodeManageModel implements IEncodeManageModel {
                 mode: encodeOption.mode,
                 removeOriginal: encodeOption.removeOriginal,
                 cmCut: encodeOption.cmCut,
-                sourceCmState: encodeOption.sourceCmState || 'unknown',
+                sourceCmState: encodeOption.sourceCmState || 'uncut',
                 cmTimeline: encodeOption.cmTimeline,
             });
         }

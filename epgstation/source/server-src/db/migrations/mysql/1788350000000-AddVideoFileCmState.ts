@@ -5,7 +5,7 @@ export class AddVideoFileCmState1788350000000 implements MigrationInterface {
 
     public async up(queryRunner: QueryRunner): Promise<void> {
         await queryRunner.query(
-            "ALTER TABLE `video_file` ADD `cmState` varchar(16) NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE `video_file` ADD `cmState` varchar(16) NOT NULL DEFAULT 'uncut'",
         );
     }
 

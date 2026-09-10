@@ -239,7 +239,7 @@ export default class RecordedManageModel implements IRecordedManageModel {
         videoFile.type = option.type;
         videoFile.name = option.name;
         videoFile.size = fileSize;
-        videoFile.cmState = typeof option.cmState === 'undefined' ? 'unknown' : option.cmState;
+        videoFile.cmState = typeof option.cmState === 'undefined' ? 'uncut' : option.cmState;
         videoFile.recordedId = option.recordedId;
 
         const newVideoFileId = await this.videoFileDB.insertOnce(videoFile).catch(err => {

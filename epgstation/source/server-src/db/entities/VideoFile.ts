@@ -37,9 +37,9 @@ export default class VideoFile extends BaseEntity {
     @Column({
         type: 'varchar',
         length: 16,
-        default: 'unknown',
+        default: 'uncut',
     })
-    public cmState: string = 'unknown'; // apid.VideoFileCmState
+    public cmState: string = 'uncut'; // apid.VideoFileCmState
 
     @Column()
     public recordedId!: number;
