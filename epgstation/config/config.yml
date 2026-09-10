@@ -30,7 +30,7 @@ recordedEncodeDefaultDirectory: /temp/
 
 thumbnail: '%ROOT%/thumbnail'
 thumbnailSize: 480x270
-thumbnailPosition: 5
+thumbnailPosition: 30
 
 ffmpeg: /opt/ffmpeg-7.0.2/bin/ffmpeg
 ffprobe: /opt/ffmpeg-7.0.2/bin/ffprobe
