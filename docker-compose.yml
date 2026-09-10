@@ -58,7 +58,7 @@ services:
 
     epgstation:
         container_name: epgstation-v2
-        image: epgstation-v2:main-integration-self-contained-20260910
+        image: epgstation-v2:main-integration-489516a
         volumes:
             - /etc/localtime:/etc/localtime:ro
             - ./epgstation/config:/app/config
