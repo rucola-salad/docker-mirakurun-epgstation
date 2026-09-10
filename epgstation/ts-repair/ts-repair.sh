@@ -156,7 +156,14 @@ mapfile -t AUDIO_INFO < <(
         -select_streams a \
         -show_entries stream=index,sample_rate,channels \
         -of csv=p=0 \
-        "$INPUT"
+        "$INPUT" |
+    awk -F',' '
+        NF >= 3 &&
+        $1 ~ /^[0-9]+$/ &&
+        !seen[$1]++ {
+            print $1 "," $2 "," $3
+        }
+    '
 )
 
 [ "${#AUDIO_INFO[@]}" -gt 0 ] ||
@@ -194,6 +201,25 @@ log "video repair finished"
 [ -s "$MAP" ] ||
     fail "video repair produced no timeline map"
 
+mapfile -t VIDEO_FRAME_RATES < <(
+    sed -n \
+        's/^frame_rate=\([0-9][0-9]*\/[0-9][0-9]*\)$/\1/p' \
+        "$WORK_DIR/video-repair.log"
+)
+
+[ "${#VIDEO_FRAME_RATES[@]}" -eq 1 ] ||
+    fail "video repair produced invalid frame rate count: ${#VIDEO_FRAME_RATES[@]}"
+
+VIDEO_FRAME_RATE="${VIDEO_FRAME_RATES[0]}"
+VIDEO_FRAME_RATE_NUM="${VIDEO_FRAME_RATE%/*}"
+VIDEO_FRAME_RATE_DEN="${VIDEO_FRAME_RATE#*/}"
+
+[ "$VIDEO_FRAME_RATE_NUM" -gt 0 ] &&
+[ "$VIDEO_FRAME_RATE_DEN" -gt 0 ] ||
+    fail "invalid video frame rate: $VIDEO_FRAME_RATE"
+
+log "video_frame_rate=${VIDEO_FRAME_RATE}"
+
 #
 # 2. Audio repair
 #
@@ -218,6 +244,8 @@ log "audio repair finished"
 FFMPEG_ARGS=(
     -hide_banner
     -y
+    -fflags +genpts
+    -framerate "$VIDEO_FRAME_RATE"
     -f mpegvideo
     -i "$VIDEO"
 )
