@@ -19,8 +19,7 @@ cache/
 tmp/
 
 # EPGStation runtime/generated
-epgstation/thumbnail/*
-!epgstation/thumbnail/.gitkeep
+epgstation/thumbnail/
 epgstation/cm-analyzer-data/
 
 # CM analyzer test/generated results
@@ -49,3 +48,11 @@ epgstation/test-env/thumbnail/
 # CM Analyzer generated test data
 epgstation/cm-analyzer-*-test-data-*/
 epgstation/cm-analyzer-*-test-*/
+
+# Production runtime data
+epgstation/data/
+mirakurun/data/
+mirakurun/opt/
+
+# CM Analyzer local test/runtime data
+epgstation/cm-analyzer-data-test/
