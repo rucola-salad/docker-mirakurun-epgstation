@@ -1118,6 +1118,108 @@ function parseChapters(filePath) {
     return chapters;
 }
 
+/*
+ * JoinLogoScpTrialSetLinux output/chapter_jls.js converts
+ * chapter frame positions to milliseconds assuming a fixed
+ * 30000/1001 fps source.  Convert those timestamps back to
+ * the JLSE frame position and then onto the actual source
+ * video timeline.
+ */
+function normalizeJlseChapters(
+    chapters,
+    videoFps
+) {
+    const jlseFps =
+        30000 / 1001;
+
+    if (
+        !Array.isArray(chapters) ||
+        !Number.isFinite(videoFps) ||
+        videoFps <= 0
+    ) {
+        return chapters;
+    }
+
+    return chapters.map(chapter => {
+        const jlseTime =
+            Number(chapter.time);
+
+        if (
+            !Number.isFinite(jlseTime)
+        ) {
+            return chapter;
+        }
+
+        /*
+         * chapter_jls.js InsertFrame():
+         *
+         *   msec =
+         *     parseInt(
+         *       (frame * 1001 + 30 / 2) / 30
+         *     )
+         *
+         * Recover the nearest source frame from the stored
+         * millisecond timestamp.
+         */
+        const frame =
+            Math.round(
+                jlseTime * jlseFps
+            );
+
+        const time =
+            frame / videoFps;
+
+        return {
+            ...chapter,
+            time,
+            timeText:
+                formatChapterTime(time),
+        };
+    });
+}
+
+function formatChapterTime(time) {
+    const totalMilliseconds =
+        Math.max(
+            0,
+            Math.round(time * 1000)
+        );
+
+    const milliseconds =
+        totalMilliseconds % 1000;
+
+    const totalSeconds =
+        Math.floor(
+            totalMilliseconds / 1000
+        );
+
+    const seconds =
+        totalSeconds % 60;
+
+    const totalMinutes =
+        Math.floor(
+            totalSeconds / 60
+        );
+
+    const minutes =
+        totalMinutes % 60;
+
+    const hours =
+        Math.floor(
+            totalMinutes / 60
+        );
+
+    return (
+        String(hours).padStart(2, '0') +
+        ':' +
+        String(minutes).padStart(2, '0') +
+        ':' +
+        String(seconds).padStart(2, '0') +
+        '.' +
+        String(milliseconds).padStart(3, '0')
+    );
+}
+
 function parseJlscp(filePath) {
     const text =
         fs.readFileSync(filePath, 'utf8');
@@ -1391,7 +1493,10 @@ function buildAnalysis(outputRoot, metadata) {
     }
 
     const chapters =
-        parseChapters(chapterPath);
+        normalizeJlseChapters(
+            parseChapters(chapterPath),
+            metadata.videoFps
+        );
 
     const {
         segments,
@@ -1400,12 +1505,6 @@ function buildAnalysis(outputRoot, metadata) {
 
     const keepRanges =
         parseKeepRanges(cutPath);
-
-    const playbackCmRanges =
-        buildPlaybackCmRanges(
-            chapters,
-            metadata.videoFps
-        );
 
     const totalFrames =
         Number.isFinite(metadata.videoDuration)
@@ -1418,10 +1517,28 @@ function buildAnalysis(outputRoot, metadata) {
     const cutRanges =
         buildCutRanges(
             keepRanges,
-            playbackCmRanges,
+            cmRanges,
             totalFrames,
             metadata.videoFps
         );
+
+    const playbackCmRanges =
+        cutRanges
+            .filter(
+                range => range.kind === 'cm'
+            )
+            .map(
+                range => ({
+                    startFrame:
+                        range.startFrame,
+                    endFrame:
+                        range.endFrame,
+                    startTime:
+                        range.startTime,
+                    endTime:
+                        range.endTime,
+                })
+            );
 
     const firstKeepRange =
         keepRanges[0];
@@ -2874,8 +2991,32 @@ async function loadAnalysisForPlayback(
             'analysis.json'
         );
 
+    const manualPath =
+        getManualTimelinePath(
+            recordedId
+        );
+
     if (!isUsableFile(analysisPath)) {
-        return null;
+        if (
+            !isUsableFile(
+                manualPath
+            )
+        ) {
+            return null;
+        }
+
+        const manual =
+            JSON.parse(
+                fs.readFileSync(
+                    manualPath,
+                    'utf8'
+                )
+            );
+
+        return applyManualTimelineToAnalysis(
+            null,
+            manual
+        );
     }
 
     const analysis =
@@ -2940,6 +3081,128 @@ async function loadAnalysisForPlayback(
             frameRate;
 
         if (
+            Array.isArray(
+                analysis.timeline.chapters
+            )
+        ) {
+            analysis.timeline.chapters =
+                normalizeJlseChapters(
+                    analysis.timeline.chapters,
+                    frameRate
+                );
+        }
+
+        if (
+            Array.isArray(
+                analysis.timeline.cutRanges
+            ) &&
+            analysis.jlse &&
+            Array.isArray(
+                analysis.jlse.segments
+            )
+        ) {
+            const jlseCmRanges =
+                analysis.jlse.segments
+                    .filter(
+                        segment =>
+                            segment.type === 'CM'
+                    )
+                    .map(
+                        segment => ({
+                            startFrame:
+                                Number(
+                                    segment.startFrame
+                                ),
+                            endFrame:
+                                Number(
+                                    segment.endFrame
+                                ),
+                        })
+                    );
+
+            analysis.timeline.cmRanges =
+                analysis.timeline.cutRanges
+                    .filter(range => {
+                        if (
+                            range.kind === 'head' ||
+                            range.kind === 'tail'
+                        ) {
+                            return false;
+                        }
+
+                        const startFrame =
+                            Number(
+                                range.startFrame
+                            );
+                        const endFrame =
+                            Number(
+                                range.endFrame
+                            );
+
+                        return jlseCmRanges.some(
+                            cmRange =>
+                                cmRange.startFrame <=
+                                    endFrame &&
+                                cmRange.endFrame >=
+                                    startFrame
+                        );
+                    })
+                    .map(
+                        range => ({
+                            startFrame:
+                                Number(
+                                    range.startFrame
+                                ),
+                            endFrame:
+                                Number(
+                                    range.endFrame
+                                ),
+                            startTime:
+                                Number(
+                                    range.startFrame
+                                ) / frameRate,
+                            endTime:
+                                (
+                                    Number(
+                                        range.endFrame
+                                    ) + 1
+                                ) / frameRate,
+                        })
+                    );
+        } else if (
+            Array.isArray(
+                analysis.timeline.cutRanges
+            )
+        ) {
+            analysis.timeline.cmRanges =
+                analysis.timeline.cutRanges
+                    .filter(
+                        range =>
+                            range.kind === 'cm'
+                    )
+                    .map(
+                        range => ({
+                            startFrame:
+                                Number(
+                                    range.startFrame
+                                ),
+                            endFrame:
+                                Number(
+                                    range.endFrame
+                                ),
+                            startTime:
+                                Number(
+                                    range.startFrame
+                                ) / frameRate,
+                            endTime:
+                                (
+                                    Number(
+                                        range.endFrame
+                                    ) + 1
+                                ) / frameRate,
+                        })
+                    );
+        } else if (
             Array.isArray(
                 analysis.timeline.chapters
             )
@@ -3019,6 +3282,39 @@ async function loadAnalysisForPlayback(
             }
         }
     }
+
+
+    if (
+        isUsableFile(
+            manualPath
+        )
+    ) {
+        const manual =
+            JSON.parse(
+                fs.readFileSync(
+                    manualPath,
+                    'utf8'
+                )
+            );
+
+        return applyManualTimelineToAnalysis(
+            analysis,
+            manual
+        );
+    }
+
+    analysis.manualTimeline = {
+        active: false,
+        hasAutomaticAnalysis: true,
+        frameRate:
+            analysis.timeline.frameRate,
+        duration: null,
+        pins:
+            deriveManualPinsFromTimeline(
+                analysis.timeline
+            ),
+        savedAt: null,
+    };
 
     return analysis;
 }
@@ -3295,8 +3591,920 @@ function listLogos() {
     return result;
 }
 
+
+const MANUAL_TIMELINE_PIN_TYPES =
+    new Set([
+        'chapter',
+        'main-start',
+        'cm-start',
+        'cm-end',
+        'main-end',
+    ]);
+
+function getManualTimelinePath(recordedId) {
+    return path.join(
+        DATA_ROOT,
+        String(recordedId),
+        'manual-timeline.json'
+    );
+}
+
+function readJsonRequest(req) {
+    return new Promise(
+        (resolve, reject) => {
+            const chunks = [];
+            let size = 0;
+
+            req.on(
+                'data',
+                chunk => {
+                    size += chunk.length;
+
+                    if (size > 1024 * 1024) {
+                        reject(
+                            new Error(
+                                'request body too large'
+                            )
+                        );
+                        req.destroy();
+                        return;
+                    }
+
+                    chunks.push(chunk);
+                }
+            );
+
+            req.on(
+                'end',
+                () => {
+                    if (chunks.length === 0) {
+                        resolve({});
+                        return;
+                    }
+
+                    try {
+                        resolve(
+                            JSON.parse(
+                                Buffer.concat(
+                                    chunks
+                                ).toString(
+                                    'utf8'
+                                )
+                            )
+                        );
+                    } catch (_err) {
+                        reject(
+                            new Error(
+                                'invalid JSON body'
+                            )
+                        );
+                    }
+                }
+            );
+
+            req.on(
+                'error',
+                reject
+            );
+        }
+    );
+}
+
+function formatManualTimelineTime(seconds) {
+    const safe =
+        Math.max(
+            0,
+            Number(seconds) || 0
+        );
+
+    const hours =
+        Math.floor(
+            safe / 3600
+        );
+
+    const minutes =
+        Math.floor(
+            (
+                safe -
+                hours * 3600
+            ) / 60
+        );
+
+    const secs =
+        Math.floor(
+            safe % 60
+        );
+
+    const millis =
+        Math.round(
+            (
+                safe -
+                Math.floor(safe)
+            ) * 1000
+        );
+
+    return [
+        String(hours).padStart(2, '0'),
+        String(minutes).padStart(2, '0'),
+        String(secs).padStart(2, '0'),
+    ].join(':') +
+        '.' +
+        String(millis).padStart(3, '0');
+}
+
+function normalizeManualTimeline(
+    recordedId,
+    body
+) {
+    const frameRate =
+        Number(
+            body &&
+            body.frameRate
+        );
+
+    const duration =
+        Number(
+            body &&
+            body.duration
+        );
+
+    if (
+        !Number.isFinite(frameRate) ||
+        frameRate <= 0
+    ) {
+        throw new Error(
+            'invalid frameRate'
+        );
+    }
+
+    if (
+        !Number.isFinite(duration) ||
+        duration <= 0
+    ) {
+        throw new Error(
+            'invalid duration'
+        );
+    }
+
+    if (
+        !body ||
+        !Array.isArray(body.pins)
+    ) {
+        throw new Error(
+            'pins must be an array'
+        );
+    }
+
+    const totalFrames =
+        Math.max(
+            1,
+            Math.round(
+                duration *
+                frameRate
+            )
+        );
+
+    const pins =
+        body.pins.map(
+            (pin, index) => {
+                const frame =
+                    Number(
+                        pin &&
+                        pin.frame
+                    );
+
+                const type =
+                    pin &&
+                    typeof pin.type ===
+                        'string'
+                        ? pin.type
+                        : '';
+
+                if (
+                    !MANUAL_TIMELINE_PIN_TYPES.has(
+                        type
+                    )
+                ) {
+                    throw new Error(
+                        `invalid pin type at index ${index}`
+                    );
+                }
+
+                const canUseEndBoundary =
+                    type === 'cm-end' ||
+                    type === 'main-end';
+
+                if (
+                    !Number.isInteger(frame) ||
+                    frame < 0 ||
+                    (
+                        canUseEndBoundary
+                            ? frame > totalFrames
+                            : frame >= totalFrames
+                    )
+                ) {
+                    throw new Error(
+                        `invalid pin frame at index ${index}`
+                    );
+                }
+
+                return {
+                    frame,
+                    type,
+                };
+            }
+        )
+        .sort(
+            (a, b) =>
+                a.frame - b.frame
+        );
+
+    const mainStarts =
+        pins.filter(
+            pin =>
+                pin.type ===
+                'main-start'
+        );
+
+    const mainEnds =
+        pins.filter(
+            pin =>
+                pin.type ===
+                'main-end'
+        );
+
+    if (mainStarts.length > 1) {
+        throw new Error(
+            'multiple main-start pins'
+        );
+    }
+
+    if (mainEnds.length > 1) {
+        throw new Error(
+            'multiple main-end pins'
+        );
+    }
+
+    if (
+        mainStarts.length === 1 &&
+        mainEnds.length === 1 &&
+        mainStarts[0].frame >=
+            mainEnds[0].frame
+    ) {
+        throw new Error(
+            'main-start must be before main-end'
+        );
+    }
+
+    let openCm = null;
+
+    for (const pin of pins) {
+        if (pin.type === 'cm-start') {
+            if (openCm !== null) {
+                throw new Error(
+                    'cm-start without previous cm-end'
+                );
+            }
+
+            openCm = pin;
+            continue;
+        }
+
+        if (pin.type === 'cm-end') {
+            if (openCm === null) {
+                throw new Error(
+                    'cm-end without cm-start'
+                );
+            }
+
+            if (pin.frame <= openCm.frame) {
+                throw new Error(
+                    'cm-end must be after cm-start'
+                );
+            }
+
+            openCm = null;
+        }
+    }
+
+    if (openCm !== null) {
+        throw new Error(
+            'cm-start without cm-end'
+        );
+    }
+
+    return {
+        version: 1,
+        recordedId:
+            String(recordedId),
+        savedAt:
+            new Date().toISOString(),
+        frameRate,
+        duration,
+        pins,
+    };
+}
+
+function buildManualTimeline(
+    manual
+) {
+    const frameRate =
+        Number(
+            manual.frameRate
+        );
+
+    const duration =
+        Number(
+            manual.duration
+        );
+
+    const totalFrames =
+        Math.max(
+            1,
+            Math.round(
+                duration *
+                frameRate
+            )
+        );
+
+    const pins =
+        manual.pins.slice().sort(
+            (a, b) =>
+                a.frame - b.frame
+        );
+
+    const chapters =
+        pins.map(
+            (pin, index) => {
+                const time =
+                    pin.frame /
+                    frameRate;
+
+                return {
+                    number:
+                        index + 1,
+                    time,
+                    timeText:
+                        formatManualTimelineTime(
+                            time
+                        ),
+                    name:
+                        pin.type,
+                };
+            }
+        );
+
+    const cmRanges = [];
+    let cmStart = null;
+
+    for (const pin of pins) {
+        if (pin.type === 'cm-start') {
+            cmStart = pin.frame;
+            continue;
+        }
+
+        if (
+            pin.type === 'cm-end' &&
+            cmStart !== null
+        ) {
+            cmRanges.push({
+                startFrame:
+                    cmStart,
+                endFrame:
+                    pin.frame - 1,
+                startTime:
+                    cmStart /
+                    frameRate,
+                endTime:
+                    pin.frame /
+                    frameRate,
+            });
+
+            cmStart = null;
+        }
+    }
+
+    const mainStartPin =
+        pins.find(
+            pin =>
+                pin.type ===
+                'main-start'
+        );
+
+    const mainEndPin =
+        pins.find(
+            pin =>
+                pin.type ===
+                'main-end'
+        );
+
+    const playbackStart =
+        mainStartPin
+            ? mainStartPin.frame /
+                frameRate
+            : 0;
+
+    const playbackEnd =
+        mainEndPin
+            ? mainEndPin.frame /
+                frameRate
+            : duration;
+
+    const cutRanges = [];
+
+    if (
+        mainStartPin &&
+        mainStartPin.frame > 0
+    ) {
+        cutRanges.push({
+            startFrame: 0,
+            endFrame:
+                mainStartPin.frame - 1,
+            startTime: 0,
+            endTime:
+                mainStartPin.frame /
+                frameRate,
+            kind: 'head',
+        });
+    }
+
+    for (const range of cmRanges) {
+        cutRanges.push({
+            startFrame:
+                range.startFrame,
+            endFrame:
+                range.endFrame,
+            startTime:
+                range.startTime,
+            endTime:
+                range.endTime,
+            kind: 'cm',
+        });
+    }
+
+    if (
+        mainEndPin &&
+        mainEndPin.frame <
+            totalFrames
+    ) {
+        cutRanges.push({
+            startFrame:
+                mainEndPin.frame,
+            endFrame:
+                totalFrames - 1,
+            startTime:
+                mainEndPin.frame /
+                frameRate,
+            endTime:
+                duration,
+            kind: 'tail',
+        });
+    }
+
+    cutRanges.sort(
+        (a, b) =>
+            a.startFrame -
+            b.startFrame
+    );
+
+    const keepRanges = [];
+    let cursor =
+        mainStartPin
+            ? mainStartPin.frame
+            : 0;
+
+    const effectiveEnd =
+        mainEndPin
+            ? mainEndPin.frame
+            : totalFrames;
+
+    for (const range of cmRanges) {
+        const start =
+            Math.max(
+                cursor,
+                range.startFrame
+            );
+
+        if (
+            start > cursor &&
+            cursor <
+                effectiveEnd
+        ) {
+            keepRanges.push({
+                startFrame:
+                    cursor,
+                endFrame:
+                    Math.min(
+                        start,
+                        effectiveEnd
+                    ) - 1,
+            });
+        }
+
+        cursor =
+            Math.max(
+                cursor,
+                range.endFrame + 1
+            );
+    }
+
+    if (
+        cursor <
+        effectiveEnd
+    ) {
+        keepRanges.push({
+            startFrame:
+                cursor,
+            endFrame:
+                effectiveEnd - 1,
+        });
+    }
+
+    return {
+        frameRate,
+        chapters,
+        cmRanges,
+        keepRanges,
+        cutRanges,
+        playbackStart,
+        playbackEnd,
+    };
+}
+
+function deriveManualPinsFromTimeline(
+    timeline
+) {
+    if (!timeline) {
+        return [];
+    }
+
+    const frameRate =
+        Number(
+            timeline.frameRate
+        );
+
+    if (
+        !Number.isFinite(frameRate) ||
+        frameRate <= 0
+    ) {
+        return [];
+    }
+
+    const pins = [];
+
+    const addPin =
+        (frame, type) => {
+            const normalizedFrame =
+                Math.max(
+                    0,
+                    Math.round(frame)
+                );
+
+            if (
+                pins.some(
+                    pin =>
+                        pin.frame ===
+                            normalizedFrame &&
+                        pin.type === type
+                )
+            ) {
+                return;
+            }
+
+            pins.push({
+                frame:
+                    normalizedFrame,
+                type,
+            });
+        };
+
+    if (
+        typeof timeline.playbackStart ===
+            'number' &&
+        Number.isFinite(
+            timeline.playbackStart
+        )
+    ) {
+        addPin(
+            timeline.playbackStart *
+                frameRate,
+            'main-start'
+        );
+    }
+
+    if (
+        typeof timeline.playbackEnd ===
+            'number' &&
+        Number.isFinite(
+            timeline.playbackEnd
+        )
+    ) {
+        addPin(
+            timeline.playbackEnd *
+                frameRate,
+            'main-end'
+        );
+    }
+
+    if (
+        Array.isArray(
+            timeline.cmRanges
+        )
+    ) {
+        for (
+            const range of
+                timeline.cmRanges
+        ) {
+            const startFrame =
+                Number.isFinite(
+                    Number(
+                        range.startFrame
+                    )
+                )
+                    ? Number(
+                        range.startFrame
+                    )
+                    : Number(
+                        range.startTime
+                    ) *
+                        frameRate;
+
+            const endBoundaryFrame =
+                Number.isFinite(
+                    Number(
+                        range.endTime
+                    )
+                )
+                    ? Math.round(
+                        Number(
+                            range.endTime
+                        ) *
+                            frameRate
+                    )
+                    : Number(
+                        range.endFrame
+                    ) + 1;
+
+            if (
+                Number.isFinite(
+                    startFrame
+                )
+            ) {
+                addPin(
+                    startFrame,
+                    'cm-start'
+                );
+            }
+
+            if (
+                Number.isFinite(
+                    endBoundaryFrame
+                )
+            ) {
+                addPin(
+                    endBoundaryFrame,
+                    'cm-end'
+                );
+            }
+        }
+    }
+
+    if (
+        Array.isArray(
+            timeline.chapters
+        )
+    ) {
+        for (
+            const chapter of
+                timeline.chapters
+        ) {
+            const frame =
+                Math.round(
+                    Number(
+                        chapter.time
+                    ) *
+                        frameRate
+                );
+
+            if (
+                !Number.isFinite(frame)
+            ) {
+                continue;
+            }
+
+            const isSemanticBoundary =
+                pins.some(
+                    pin =>
+                        pin.frame ===
+                            frame &&
+                        pin.type !==
+                            'chapter'
+                );
+
+            if (
+                !isSemanticBoundary
+            ) {
+                addPin(
+                    frame,
+                    'chapter'
+                );
+            }
+        }
+    }
+
+    pins.sort(
+        (a, b) =>
+            a.frame - b.frame
+    );
+
+    return pins;
+}
+
+function applyManualTimelineToAnalysis(
+    analysis,
+    manual
+) {
+    const timeline =
+        buildManualTimeline(
+            manual
+        );
+
+    const base =
+        analysis ||
+        {
+            version: 1,
+            recordedId:
+                String(
+                    manual.recordedId
+                ),
+            stationId: '',
+            analyzedAt:
+                manual.savedAt ||
+                new Date().toISOString(),
+        };
+
+    return {
+        ...base,
+        timeline,
+        manualTimeline: {
+            active: true,
+            hasAutomaticAnalysis:
+                analysis !== null,
+            frameRate:
+                manual.frameRate,
+            duration:
+                manual.duration,
+            pins:
+                manual.pins,
+            savedAt:
+                manual.savedAt ||
+                null,
+        },
+    };
+}
+
+
 const server = http.createServer(
     async (req, res) => {
+        const manualAnalysisMatch =
+            (
+                req.method === 'POST' ||
+                req.method === 'DELETE'
+            )
+                ? req.url.match(
+                    /^\/analysis\/(\d+)$/
+                )
+                : null;
+
+        if (manualAnalysisMatch) {
+            const recordedId =
+                manualAnalysisMatch[1];
+
+            const manualPath =
+                getManualTimelinePath(
+                    recordedId
+                );
+
+            try {
+                if (
+                    req.method ===
+                    'DELETE'
+                ) {
+                    if (
+                        fs.existsSync(
+                            manualPath
+                        )
+                    ) {
+                        fs.unlinkSync(
+                            manualPath
+                        );
+                    }
+
+                    const analysis =
+                        await loadAnalysisForPlayback(
+                            recordedId
+                        );
+
+                    sendJson(
+                        res,
+                        200,
+                        {
+                            status:
+                                'automatic',
+                            analysis,
+                        }
+                    );
+
+                    return;
+                }
+
+                const body =
+                    await readJsonRequest(
+                        req
+                    );
+
+                const manual =
+                    normalizeManualTimeline(
+                        recordedId,
+                        body
+                    );
+
+                const outputDir =
+                    path.dirname(
+                        manualPath
+                    );
+
+                fs.mkdirSync(
+                    outputDir,
+                    {
+                        recursive: true,
+                    }
+                );
+
+                const tmpPath =
+                    manualPath +
+                    `.tmp-${process.pid}`;
+
+                fs.writeFileSync(
+                    tmpPath,
+                    JSON.stringify(
+                        manual,
+                        null,
+                        2
+                    ) + '\n',
+                    'utf8'
+                );
+
+                fs.renameSync(
+                    tmpPath,
+                    manualPath
+                );
+
+                const analysis =
+                    await loadAnalysisForPlayback(
+                        recordedId
+                    );
+
+                if (analysis === null) {
+                    sendJson(
+                        res,
+                        500,
+                        {
+                            error:
+                                'saved manual timeline could not be loaded',
+                        }
+                    );
+                    return;
+                }
+
+                sendJson(
+                    res,
+                    200,
+                    analysis
+                );
+            } catch (err) {
+                log(
+                    'manual timeline request failed',
+                    `recordedId=${recordedId}`,
+                    err
+                );
+
+                sendJson(
+                    res,
+                    400,
+                    {
+                        error:
+                            err &&
+                            err.message
+                                ? err.message
+                                : String(err),
+                    }
+                );
+            }
+
+            return;
+        }
+
         const analysisMatch =
             req.method === 'GET'
                 ? req.url.match(
