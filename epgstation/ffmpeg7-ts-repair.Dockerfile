@@ -82,7 +82,6 @@ COPY ts-repair/audio-writer.h /tmp/audio-writer.h
 COPY ts-repair/video-repair.c /tmp/video-repair.c
 COPY ts-repair/ts-repair.sh /tmp/ts-repair.sh
 COPY ts-repair/ts-health-check.c /tmp/ts-health-check.c
-COPY ts-repair/ts-video-timeline.c /tmp/ts-video-timeline.c
 
 RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
     cc -O2 -Wall -Wextra -I/tmp \
@@ -117,13 +116,6 @@ RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
        $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
          pkg-config --cflags --libs libavformat libavcodec libavutil)
 
-RUN PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
-    cc -O2 -Wall -Wextra \
-       /tmp/ts-video-timeline.c \
-       -o "${FFMPEG_PREFIX}/bin/ts-video-timeline.real" \
-       $(PKG_CONFIG_PATH="${FFMPEG_PREFIX}/lib/pkgconfig" \
-         pkg-config --cflags --libs libavformat libavcodec libavutil)
-
 # Collect runtime shared libraries
 RUN mkdir -p "${FFMPEG_PREFIX}/lib/runtime" && \
     { \
@@ -133,7 +125,6 @@ RUN mkdir -p "${FFMPEG_PREFIX}/lib/runtime" && \
         lddtree -l "${FFMPEG_PREFIX}/bin/audio-repair.real"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/video-repair.real"; \
         lddtree -l "${FFMPEG_PREFIX}/bin/ts-health-check.real"; \
-        lddtree -l "${FFMPEG_PREFIX}/bin/ts-video-timeline.real"; \
     } \
     | sort -u \
     | while read -r lib; do \
@@ -218,16 +209,6 @@ RUN printf '%s\n' \
     > "${FFMPEG_PREFIX}/bin/ts-health-check" && \
     chmod 755 "${FFMPEG_PREFIX}/bin/ts-health-check"
 
-# ts-video-timeline wrapper
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
-    'PREFIX="$(dirname "$SELF_DIR")"' \
-    'export LD_LIBRARY_PATH="$PREFIX/lib/runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
-    'exec "$SELF_DIR/ts-video-timeline.real" "$@"' \
-    > "${FFMPEG_PREFIX}/bin/ts-video-timeline" && \
-    chmod 755 "${FFMPEG_PREFIX}/bin/ts-video-timeline"
-
 # Builder verification
 RUN "${FFMPEG_PREFIX}/bin/ffmpeg" -version && \
     "${FFMPEG_PREFIX}/bin/ffprobe" -version && \
@@ -244,9 +225,6 @@ RUN "${FFMPEG_PREFIX}/bin/ffmpeg" -version && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
     output="$("${FFMPEG_PREFIX}/bin/ts-health-check" 2>&1 || true)" && \
-    printf '%s\n' "$output" && \
-    printf '%s\n' "$output" | grep '^Usage:' && \
-    output="$("${FFMPEG_PREFIX}/bin/ts-video-timeline" 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:'
 
@@ -277,8 +255,5 @@ RUN "/opt/ffmpeg-7.0.2/bin/ffmpeg" -version && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:' && \
     output="$(/opt/ffmpeg-7.0.2/bin/ts-health-check 2>&1 || true)" && \
-    printf '%s\n' "$output" && \
-    printf '%s\n' "$output" | grep '^Usage:' && \
-    output="$(/opt/ffmpeg-7.0.2/bin/ts-video-timeline 2>&1 || true)" && \
     printf '%s\n' "$output" && \
     printf '%s\n' "$output" | grep '^Usage:'
