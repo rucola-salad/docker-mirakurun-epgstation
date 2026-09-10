@@ -3,7 +3,7 @@ services:
     mirakurun:
         container_name: mirakurun
         build:
-          context: Mirakurun
+          context: mirakurun
           dockerfile: docker/Dockerfile
         image: chinachu/mirakurun
         cap_add:
@@ -14,9 +14,9 @@ services:
             - "9229:9229"
         volumes:
             - /etc/localtime:/etc/localtime:ro
-            - ./Mirakurun/config/:/app-config/
-            - ./Mirakurun/data/:/app-data/
-            - ./Mirakurun/opt:/opt
+            - ./mirakurun/config/:/app-config/
+            - ./mirakurun/data/:/app-data/
+            - ./mirakurun/opt:/opt
         environment:
             TZ: "Asia/Tokyo"
             ALLOW_CIDRS: "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
@@ -58,7 +58,7 @@ services:
 
     epgstation:
         container_name: epgstation-v2
-        image: epgstation-v2:main-integration-ts-repair
+        image: epgstation-v2:main-integration-self-contained-20260910
         volumes:
             - /etc/localtime:/etc/localtime:ro
             - ./epgstation/config:/app/config
@@ -100,3 +100,8 @@ services:
 volumes:
     mysql-db:
         driver: local
+
+networks:
+    default:
+        external:
+            name: docker-mirakurun-epgstation_default
