@@ -24,7 +24,9 @@
                 v-if="isShowDropInfo === true && typeof item.display.drop !== 'undefined'"
                 class="text caption font-weight-light"
                 v-bind:class="{ droped: item.display.hasDrop === true }"
-            >{{ item.display.dropSimple }}</div>
+            >
+                {{ item.display.dropSimple }}
+            </div>
             <RecordedVideoFileChips
                 v-else-if="typeof item.recordedItem.videoFiles !== 'undefined'"
                 :videoFiles="item.recordedItem.videoFiles"

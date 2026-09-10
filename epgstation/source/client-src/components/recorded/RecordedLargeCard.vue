@@ -29,7 +29,9 @@
             <div
                 v-else-if="typeof item.display.description === 'undefined' || item.display.description.replace(/\s+/g, '').length === 0"
                 class="text caption font-weight-light dummy"
-            >dummy</div>
+            >
+                dummy
+            </div>
             <div v-else class="text caption font-regular">{{ item.display.description }}</div>
         </div>
     </v-card>
