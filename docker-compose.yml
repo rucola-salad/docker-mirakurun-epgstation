@@ -84,13 +84,13 @@ services:
 
     cm-analyzer:
         container_name: cm-analyzer
-        image: cm-analyzer-test:playback-xcm
+        image: cm-analyzer:20260910
         volumes:
             - /etc/localtime:/etc/localtime:ro
             - /media/tv_record:/recorded:ro
             - ./epgstation/cm-analyzer-data:/data
             - ./epgstation/cm-analyzer-data/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
-            - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
+            - ./epgstation/cm-analyzer/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
         environment:
             TZ: "Asia/Tokyo"
             RECORDED_ROOT: "/recorded"

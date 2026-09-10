@@ -33,14 +33,14 @@ services:
 
     cm-analyzer-test:
         container_name: cm-analyzer-test
-        image: cm-analyzer-test:maintenance-cancel-20260907
+        image: cm-analyzer:20260910
 
         volumes:
             - /etc/localtime:/etc/localtime:ro
             - ./epgstation/test-env/recorded:/recorded
             - ./epgstation/cm-analyzer-data-test:/data
             - ./epgstation/cm-analyzer-data-test/logos:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/logo
-            - ./epgstation/cm-analyzer-test/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
+            - ./epgstation/cm-analyzer/ChList.csv:/tmp/JoinLogoScpTrialSetLinux/modules/join_logo_scp_trial/setting/ChList.csv:ro
             - /mnt/hdd1/cm-analyzer-logo-collector-test:/logo-collector-tmp
 
         environment:
