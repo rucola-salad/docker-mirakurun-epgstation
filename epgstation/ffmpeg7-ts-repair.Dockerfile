@@ -313,15 +313,16 @@ WORKDIR /app
 USER root
 
 RUN printf '%s\n' \
-    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main' \
-    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main' \
-    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main non-free' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main non-free' \
+    'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main non-free' \
     > /etc/apt/sources.list && \
     apt-get \
         -o Acquire::http::No-Cache=true \
         -o Acquire::http::Pipeline-Depth=0 \
         update && \
     apt-get install -y --no-install-recommends \
+        i965-va-driver-shaders \
         intel-media-va-driver \
         libva-drm2 \
         libva2 \
