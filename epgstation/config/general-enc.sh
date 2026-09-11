@@ -41,10 +41,11 @@ exec "$FFMPEG" \
     -y \
     -vaapi_device "$VAAPI_DEVICE" \
     -dual_mono_mode main \
+    -fix_sub_duration \
     -i "$INPUT" \
     -map 0:v:0 \
-    -map 0:a:0? \
-    -sn \
+    -map 0:a? \
+    -map 0:s? \
     -dn \
     -vf "$VAAPI_FILTER" \
     -c:v h264_vaapi \
@@ -54,5 +55,6 @@ exec "$FFMPEG" \
     -b:a 128k \
     -ar 48000 \
     -ac 2 \
+    -c:s mov_text \
     -movflags +faststart \
     "$OUTPUT"

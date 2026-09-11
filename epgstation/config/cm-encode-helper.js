@@ -18,6 +18,7 @@ if (!timelineText) {
 const timeline = JSON.parse(timelineText);
 const frameRate = Number(timeline.frameRate);
 const videoStartTime = Number(process.env.CM_VIDEO_START_TIME);
+const audioStreamCount = Number(process.env.CM_AUDIO_STREAM_COUNT || '1');
 const chapters = Array.isArray(timeline.chapters)
     ? timeline.chapters
     : [];
@@ -31,6 +32,13 @@ if (!Number.isFinite(frameRate) || frameRate <= 0) {
 
 if (cmCut && (!Number.isFinite(videoStartTime) || videoStartTime < 0)) {
     throw new Error('InvalidVideoStartTime');
+}
+
+if (
+    cmCut &&
+    (!Number.isInteger(audioStreamCount) || audioStreamCount < 0)
+) {
+    throw new Error('InvalidAudioStreamCount');
 }
 
 const unique = values => {
@@ -84,49 +92,98 @@ if (!cmCut) {
      * end は最終保持frameの次frame時刻。
      */
     const filters = [];
-    const concatInputs = [];
 
     /*
-     * 同じ入力streamを複数のtrim/atrimへ直接接続せず、
-     * keepRange数だけ明示的にsplit/asplitしてから切り出す。
+     * 映像と各音声streamは独立してsplit/trim/concatする。
+     *
+     * 音声は [0:a:0], [0:a:1] ... のaudio ordinalで扱うため、
+     * MPEG-TS上のglobal stream indexが 1, 11 のように離れていてもよい。
      */
     filters.push(
         `[0:v:0]split=${normalized.length}` +
         normalized.map((_range, i) => `[vsrc${i}]`).join('')
     );
-    filters.push(
-        `[0:a:0]asplit=${normalized.length}` +
-        normalized.map((_range, i) => `[asrc${i}]`).join('')
-    );
 
-    normalized.forEach((range, i) => {
+    for (let audioIndex = 0; audioIndex < audioStreamCount; audioIndex++) {
+        filters.push(
+            `[0:a:${audioIndex}]asplit=${normalized.length}` +
+            normalized
+                .map(
+                    (_range, rangeIndex) =>
+                        `[asrc${audioIndex}_${rangeIndex}]`
+                )
+                .join('')
+        );
+    }
+
+    normalized.forEach((range, rangeIndex) => {
         /*
          * Video ranges use CM Analyzer's decoded-frame numbers.
          * keepRanges endFrame is inclusive, while FFmpeg end_frame is exclusive.
-         *
+         */
+        filters.push(
+            `[vsrc${rangeIndex}]` +
+            `trim=start_frame=${range.startFrame}:end_frame=${range.endFrame + 1},` +
+            `setpts=PTS-STARTPTS` +
+            `${filterFieldmatch ? ',fieldmatch=order=tff' : ''}` +
+            `[v${rangeIndex}]`
+        );
+
+        /*
          * Audio must be cut at the PTS of the corresponding video frame.
-         * MPEG-TS decoded video does not necessarily start at PTS 0, so
-         * frame / frameRate alone is not sufficient.
+         * MPEG-TS decoded video does not necessarily start at PTS 0.
          */
         const audioStart =
             videoStartTime + range.startFrame / frameRate;
         const audioEnd =
             videoStartTime + (range.endFrame + 1) / frameRate;
 
-        filters.push(
-            `[vsrc${i}]trim=start_frame=${range.startFrame}:end_frame=${range.endFrame + 1},setpts=PTS-STARTPTS` +
-            `${filterFieldmatch ? ',fieldmatch=order=tff' : ''}[v${i}]`
-        );
-        filters.push(
-            `[asrc${i}]atrim=start=${audioStart}:end=${audioEnd},asetpts=PTS-STARTPTS[a${i}]`
-        );
+        for (
+            let audioIndex = 0;
+            audioIndex < audioStreamCount;
+            audioIndex++
+        ) {
+            const audioDuration =
+                (range.endFrame - range.startFrame + 1) / frameRate;
 
-        concatInputs.push(`[v${i}][a${i}]`);
+            filters.push(
+                `[asrc${audioIndex}_${rangeIndex}]` +
+                `atrim=start=${audioStart}:end=${audioEnd},` +
+                `asetpts=PTS-${audioStart}/TB,` +
+                `aresample=48000:async=1:first_pts=0,` +
+                `apad=pad_dur=${audioDuration},` +
+                `atrim=duration=${audioDuration},` +
+                `asetpts=PTS-STARTPTS` +
+                `[a${audioIndex}_${rangeIndex}]`
+            );
+        }
     });
 
+    /*
+     * Video concat.
+     */
     filters.push(
-        `${concatInputs.join('')}concat=n=${normalized.length}:v=1:a=1[vcut][acut]`
+        normalized
+            .map((_range, rangeIndex) => `[v${rangeIndex}]`)
+            .join('') +
+        `concat=n=${normalized.length}:v=1:a=0[vcut]`
     );
+
+    /*
+     * Audio concat: streamごとに独立した出力を作る。
+     * [acut0], [acut1], ...
+     */
+    for (let audioIndex = 0; audioIndex < audioStreamCount; audioIndex++) {
+        filters.push(
+            normalized
+                .map(
+                    (_range, rangeIndex) =>
+                        `[a${audioIndex}_${rangeIndex}]`
+                )
+                .join('') +
+            `concat=n=${normalized.length}:v=0:a=1[acut${audioIndex}]`
+        );
+    }
 
     output.filter = filters.join(';');
 
