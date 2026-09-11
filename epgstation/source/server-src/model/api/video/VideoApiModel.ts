@@ -334,7 +334,12 @@ export default class VideoApiModel implements IVideoApiModel {
      * -copyts -start_at_zero で元の PTS 座標を維持したまま
      * select で target PTS 以上の最初のフレームを取得する。
      */
-    public async getFramePreview(videoFileId: apid.VideoFileId, frame: number, frameRate: number): Promise<Buffer> {
+    public async getFramePreview(
+        videoFileId: apid.VideoFileId,
+        frame: number,
+        frameRate: number,
+        signal?: AbortSignal,
+    ): Promise<Buffer> {
         if (!Number.isInteger(frame) || frame < 0 || !Number.isFinite(frameRate) || frameRate <= 0) {
             throw new Error('InvalidFramePreviewParameter');
         }
@@ -390,6 +395,7 @@ export default class VideoApiModel implements IVideoApiModel {
                 encoding: 'buffer',
                 maxBuffer: 16 * 1024 * 1024,
                 timeout: 15000,
+                signal,
             },
         );
 
