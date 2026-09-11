@@ -1,7 +1,7 @@
 services:
     epgstation-test:
         container_name: epgstation-custom-test
-        image: ${EPGSTATION_TEST_IMAGE:-epgstation-v2:main-integration-489516a}
+        image: ${EPGSTATION_TEST_IMAGE:-epgstation-v2:main-integration-77ea55b}
 
         volumes:
             - /etc/localtime:/etc/localtime:ro
