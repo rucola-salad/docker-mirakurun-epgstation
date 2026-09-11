@@ -26,10 +26,10 @@ FIELD_ORDER="$(
 
 case "$FIELD_ORDER" in
     progressive)
-        VAAPI_FILTER="format=nv12,hwupload,scale_vaapi=w=1920:h=1080"
+        VAAPI_FILTER="scale=1920:1080,format=nv12,hwupload"
         ;;
     *)
-        VAAPI_FILTER="format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1920:h=1080"
+        VAAPI_FILTER="bwdif=mode=send_field:parity=auto:deint=all,scale=1920:1080,format=nv12,hwupload"
         ;;
 esac
 
