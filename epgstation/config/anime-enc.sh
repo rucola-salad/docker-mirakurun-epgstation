@@ -9,10 +9,33 @@ if [ -z "$INPUT" ] || [ -z "$OUTPUT" ]; then
     exit 1
 fi
 
-FFMPEG="${FFMPEG:-/opt/ffmpeg-7.0.2/bin/ffmpeg}"
+FFMPEG="${FFMPEG:-/app/config/ffmpeg-i965.sh}"
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD128}"
 HELPER="/app/config/cm-encode-helper.js"
 
+FFPROBE="${FFPROBE:-/opt/ffmpeg-7.0.2/bin/ffprobe}"
+
+FIELD_ORDER="$(
+    "$FFPROBE" \
+        -v error \
+        -select_streams v:0 \
+        -show_entries stream=field_order \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$INPUT" |
+    head -n 1
+)"
+
+case "$FIELD_ORDER" in
+    progressive)
+        ANIME_FILTER="fps=30000/1001,decimate,setpts=PTS-STARTPTS,scale=1280:720:flags=bilinear,format=nv12,hwupload"
+        ;;
+    *)
+        ANIME_FILTER="fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload"
+        ;;
+esac
+
+echo "Input field order: ${FIELD_ORDER:-unknown}" >&2
+echo "Anime filter: $ANIME_FILTER" >&2
 
 META_FILE=""
 
@@ -145,10 +168,11 @@ elif [ -n "$META_FILE" ]; then
         -map_chapters 1 \
         -sn \
         -dn \
-        -vf "fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload" \
+        -vf "$ANIME_FILTER" \
         -c:v h264_vaapi \
         -qp 22 \
         -profile:v high \
+        -r 24000/1001 \
         -c:a aac \
         -b:a 128k \
         -ar 48000 \
@@ -166,10 +190,11 @@ else
         -map 0:a:0? \
         -sn \
         -dn \
-        -vf "fieldmatch=order=tff,decimate,scale=1280:720:flags=bilinear,format=nv12,hwupload" \
+        -vf "$ANIME_FILTER" \
         -c:v h264_vaapi \
         -qp 22 \
         -profile:v high \
+        -r 24000/1001 \
         -c:a aac \
         -b:a 128k \
         -ar 48000 \

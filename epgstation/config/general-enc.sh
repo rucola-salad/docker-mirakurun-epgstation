@@ -9,8 +9,32 @@ if [ -z "$INPUT" ] || [ -z "$OUTPUT" ]; then
     exit 1
 fi
 
-FFMPEG="${FFMPEG:-/opt/ffmpeg-7.0.2/bin/ffmpeg}"
+FFMPEG="${FFMPEG:-/app/config/ffmpeg-i965.sh}"
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD128}"
+
+FFPROBE="${FFPROBE:-/opt/ffmpeg-7.0.2/bin/ffprobe}"
+
+FIELD_ORDER="$(
+    "$FFPROBE" \
+        -v error \
+        -select_streams v:0 \
+        -show_entries stream=field_order \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$INPUT" |
+    head -n 1
+)"
+
+case "$FIELD_ORDER" in
+    progressive)
+        VAAPI_FILTER="format=nv12,hwupload,scale_vaapi=w=1920:h=1080"
+        ;;
+    *)
+        VAAPI_FILTER="format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1920:h=1080"
+        ;;
+esac
+
+echo "Input field order: ${FIELD_ORDER:-unknown}" >&2
+echo "VAAPI filter: $VAAPI_FILTER" >&2
 
 
 exec "$FFMPEG" \
@@ -22,7 +46,7 @@ exec "$FFMPEG" \
     -map 0:a:0? \
     -sn \
     -dn \
-    -vf "format=nv12,hwupload,deinterlace_vaapi=rate=field,scale_vaapi=w=1920:h=1080" \
+    -vf "$VAAPI_FILTER" \
     -c:v h264_vaapi \
     -qp 22 \
     -profile:v high \
