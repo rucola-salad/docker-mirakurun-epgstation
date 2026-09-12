@@ -56,7 +56,36 @@ services:
         networks:
             - epgstation-network
 
+
+    mysql-epgstation-test:
+        container_name: mysql-epgstation-test
+        image: mariadb:10.5
+
+        volumes:
+            - epgstation-test-mysql-db:/var/lib/mysql
+
+        environment:
+            MYSQL_USER: epgstation
+            MYSQL_PASSWORD: epgstation
+            MYSQL_ROOT_PASSWORD: epgstation
+            MYSQL_DATABASE: epgstation
+            TZ: "Asia/Tokyo"
+
+        command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --performance-schema=false
+
+        restart: unless-stopped
+
+        networks:
+            - epgstation-network
+
+
 networks:
     epgstation-network:
         external: true
         name: docker-mirakurun-epgstation_default
+
+
+volumes:
+    epgstation-test-mysql-db:
+        external: true
+        name: epgstation-test-mysql-db
