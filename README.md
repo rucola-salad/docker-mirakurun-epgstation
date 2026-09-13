@@ -97,14 +97,42 @@ ls -l /dev/dri
 
 Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`libva2`、`libva-drm2` を組み込んでいます。実機では Intel Gemini Lake / UHD Graphics 600 と Intel iHD driver を使用し、H.264 の VAAPI ハードウェアエンコードを確認しています。
 
-### ストレージ
+### ストレージとホスト側保存先
 
-現在の Compose には次の実環境用パスがあります。
+`docker-compose.yml` / `docker-compose.test.yml` に記載されている **ホスト側の保存先パスは環境依存です**。このリポジトリに記載されている `/media/tv_record` や `/mnt/hdd1/...` は、本リポジトリ作者の実機構成に合わせた値であり、利用者全員が同じディレクトリ構成にする必要はありません。
 
-- 録画: `/media/tv_record`
-- TS Repair 作業領域: `/mnt/hdd1/ts-repair-work/epgstation-runtime`
+利用前に、各 Compose ファイルの bind mount の左辺（`ホスト側パス:コンテナ側パス` のホスト側）を、自分のストレージ構成に合わせて変更してください。特に録画データや TS Repair の作業領域は容量を多く使用するため、十分な空き容量があるファイルシステムを指定してください。
 
-実機では `/media/tv_record` 自体を録画用 HDD のマウントポイントにはせず、録画用 HDD `/dev/sda1` を `/mnt/hdd1` にマウントし、その配下の `/mnt/hdd1/record/` を録画データの実体保存先としています。`/media/tv_record` はそこを指すシンボリックリンクです。
+代表的な指定は次のとおりです。
+
+| 用途 | このリポジトリの実機例 | コンテナ側パス | 利用者側での扱い |
+| --- | --- | --- | --- |
+| 録画データ | `/media/tv_record` | `/app/recorded` / `/recorded` | 録画を保存したい任意の大容量ストレージ上のディレクトリへ変更可 |
+| TS Repair 作業領域 | `/mnt/hdd1/ts-repair-work/epgstation-runtime` | `/app/ts-repair-work` | 十分な一時作業容量を確保できる任意のディレクトリへ変更可 |
+| EPGStation 設定 | `./epgstation/config` | `/app/config` | 通常はリポジトリ内の相対パスをそのまま利用 |
+| EPGStation データ | `./epgstation/data` | `/app/data` | 必要に応じて永続化先を変更可 |
+| サムネイル | `./epgstation/thumbnail` | `/app/thumbnail` | 必要に応じて永続化先を変更可 |
+| EPGStation ログ | `./epgstation/logs` | `/app/logs` | 必要に応じて永続化先を変更可 |
+| CM Analyzer データ | `./epgstation/cm-analyzer-data` | `/data` | 必要に応じて永続化先を変更可 |
+| MariaDB | Docker Volume `mysql-db` | `/var/lib/mysql` | 通常は Docker Volume を利用 |
+
+例えば、録画用ディスクを `/srv/recording` にマウントしている環境なら、Compose の録画 bind mount を次のように変更できます。
+
+```yaml
+volumes:
+  - /srv/recording:/app/recorded
+```
+
+CM Analyzer からも同じ録画データを参照するため、そちらのホスト側パスも同じ実体を指すようにします。
+
+```yaml
+volumes:
+  - /srv/recording:/recorded:ro
+```
+
+#### 本リポジトリ作者の実機例
+
+実機では外付け録画用 HDD `/dev/sda1` を `/mnt/hdd1` にマウントし、その配下の `/mnt/hdd1/record/` を録画データの実体保存先としています。Compose から参照する `/media/tv_record` は、そこを指すシンボリックリンクです。
 
 ```text
 /dev/sda1 (ext4 / 7.3 TB)
@@ -114,12 +142,10 @@ Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`
          └── /media/tv_record -> /mnt/hdd1/record/
 ```
 
-したがって、Docker Compose や EPGStation からは `/media/tv_record` という固定パスを利用しつつ、実データは大容量 HDD 上の `/mnt/hdd1/record/` に保存されます。この構成により、将来ストレージ構成を変更する場合でも、アプリケーション側のパスを変更せずシンボリックリンクの参照先で吸収しやすくしています。
+この構成はあくまで**動作確認済み実機の一例**です。別のマウントポイント、内蔵ディスク、NAS 等を利用する場合は、それぞれの環境に適したホスト側パスを指定してください。
 
 > [!IMPORTANT]
-> `/media/tv_record` は `/mnt/hdd1/record/` へのシンボリックリンクであるため、Docker / EPGStation を起動する前に `/dev/sda1` が `/mnt/hdd1` へ正しくマウントされていることを確認してください。録画用 HDD が未マウントの状態で運用すると、意図しないファイルシステムへの書き込みや容量枯渇につながる可能性があります。
-
-別環境で利用する場合は `docker-compose.yml` / `docker-compose.test.yml` のマウント先を変更してください。
+> 外付けディスクや別ファイルシステムを bind mount の保存先として利用する場合は、Docker / EPGStation を起動する前に対象ストレージが正しくマウントされていることを確認してください。未マウントのまま起動すると、本来の保存先ではなくホストのルートファイルシステム側へディレクトリやデータが作成され、容量枯渇につながる場合があります。
 
 ## 動作確認済み環境
 
@@ -361,6 +387,8 @@ docker-compose -f docker-compose.test.yml down
 df -h / /mnt/hdd1
 docker system df
 ```
+
+上記の `/mnt/hdd1` は本リポジトリ作者の実機例です。別の保存先を使用する場合は、自分の録画・作業領域のマウントポイントに読み替えて確認してください。
 
 不要な Docker イメージや録画データを自動的に削除する運用にはしていません。削除を伴うメンテナンスは、対象を確認してから手動で行うことを推奨します。
 
