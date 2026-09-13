@@ -59,7 +59,7 @@ flowchart TD
     end
 
     TUNER[PLEX PX-Q3U4]
-    GPU[Intel GPU<br/>VAAPI]
+    GPU[Intel UHD Graphics 600<br/>VAAPI]
 
     Browser -->|HTTP :8888| EPG
     EPG --> DB
@@ -81,12 +81,14 @@ Linux ホストを前提としています。Windows / macOS の Docker Desktop 
 - Linux（Debian / Ubuntu 系を想定）
 - x86_64 / amd64
 - Docker Engine
-- Docker Compose v2
+- Docker Compose
 - Git
 - 4 CPU コア以上推奨
-- メモリ 8 GB 以上推奨（ビルドや並列処理を考慮する場合は 16 GB 程度あると余裕があります）
+- メモリ 8 GB 以上推奨（実機では約 4 GB でも動作していますが、イメージビルドや並列処理の余裕は小さくなります）
 - 録画用の大容量ストレージ
 - TS Repair 用の作業領域
+
+動作確認済み実機では Docker Compose v1 (`docker-compose`) を使用しています。本 README のコマンド例も実機に合わせて `docker-compose` 形式で記載しています。Compose v2 を利用する場合は `docker-compose` を `docker compose` に読み替えてください。
 
 ### GPU / VAAPI
 
@@ -100,6 +102,8 @@ ls -l /dev/dri
 
 Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`libva2`、`libva-drm2` を組み込んでいます。GPU 世代によって i965 / iHD の使用状況は異なります。
 
+実機では Intel Gemini Lake / UHD Graphics 600 と Intel iHD driver を使用し、H.264 の VAAPI ハードウェアエンコードを確認しています。
+
 ### ストレージ
 
 現在の Compose には次の実環境用パスがあります。
@@ -111,28 +115,48 @@ Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`
 
 ## 動作確認済み環境
 
-現在確認できている主要構成です。OS、CPU、メモリ、GPU 型番などは実機情報を確認後に追記します。
+実際に本リポジトリを運用している `tuner-server` の主要構成です。
 
 | Item | Environment |
 | --- | --- |
+| Host | `tuner-server` |
+| OS | Ubuntu 22.04 LTS (Jammy Jellyfish) |
+| Kernel | `6.5.0-41-generic` |
+| Architecture | x86_64 |
+| CPU | Intel Celeron N4120 @ 1.10 GHz / 4 cores / 4 threads |
+| Memory | 3.7 GiB RAM + 2.0 GiB Swap |
+| GPU | Intel Gemini Lake / UHD Graphics 600 (`8086:3185`) |
+| VA-API | 1.14 (libva 2.12.0) |
+| VAAPI driver | Intel iHD driver 22.3.1 |
+| VAAPI device | `/dev/dri/renderD128` |
+| Docker | 20.10.21 |
+| Docker Compose | 1.29.2 (`/usr/bin/docker-compose`) |
 | EPGStation | 2.6.20 ベース独自改修版 |
 | FFmpeg | 7.0.2 / source build |
 | Database | MariaDB 10.5 |
-| GPU | Intel GPU / VAAPI |
-| VAAPI device | `/dev/dri/renderD128` |
 | Tuner | PLEX PX-Q3U4 |
+| Tuner USB ID | `0511:084a` |
+| Tuner driver | `px4_drv` 0.4.2 / DKMS |
+| Tuner devices | `/dev/px4video0` ～ `/dev/px4video7` |
+| System filesystem | `/dev/mmcblk1p2` / ext4 / 56 GB |
+| Recording / work filesystem | `/dev/sda1` / ext4 / 7.3 TB (`/mnt/hdd1`) |
 | CM Analyzer | JoinLogoScpTrialSetLinux + patches + genlogo |
+
+> [!NOTE]
+> 上記は「最低要件」ではなく、現在実際に動作確認している環境です。特にメモリ容量やストレージ構成は用途・ビルド方法・同時処理数に応じて余裕を持たせてください。
 
 ## TV チューナー: PLEX PX-Q3U4
 
 動作確認環境では [PLEX PX-Q3U4](https://plex-net.co.jp/item/tv-tuner/px-q3u4/) を使用しています。USB 接続の外付けデジタル TV チューナーで、地上デジタル 4ch + BS/CS 4ch の構成です。
 
-Linux 用の非公式ドライバとして [nns779/px4_drv](https://github.com/nns779/px4_drv) があり、PX-Q3U4 も対応機種に含まれています。
+Linux 用ドライバには [nns779/px4_drv](https://github.com/nns779/px4_drv) を使用しています。実機では `px4_drv` 0.4.2 を DKMS で導入しており、Kernel `6.5.0-41-generic` 用モジュールとしてロードされています。
 
-PX-Q3U4 では `/dev/px4video0` ～ `/dev/px4video7` の8デバイスを使用できます。本環境の Mirakurun コンテナにはこれらと `/dev/bus` を渡しています。
+PX-Q3U4 では `/dev/px4video0` ～ `/dev/px4video7` の8デバイスを使用しています。本環境の Mirakurun コンテナにはこれらと `/dev/bus` を渡しています。
+
+実機で確認できる USB ID は `0511:084a` です。
 
 > [!NOTE]
-> `px4_drv` は非公式 Linux ドライバです。また、ドライバのフォークや Linux カーネルのバージョンによって導入方法・対応状況が異なる場合があります。実際に使用しているドライバのバージョン / フォークは実機確認後に追記します。
+> `px4_drv` は非公式 Linux ドライバです。Linux カーネルのバージョンや使用するドライバの版によって導入方法・対応状況が異なる場合があります。
 
 別のチューナーを使用する場合は `docker-compose.yml` と Mirakurun のチューナー設定を変更してください。
 
@@ -209,19 +233,19 @@ docker build \
 環境固有のデバイス・マウント先を確認してから起動します。
 
 ```bash
-docker compose up -d
+docker-compose up -d
 ```
 
 状態確認:
 
 ```bash
-docker compose ps
+docker-compose ps
 ```
 
 ログ:
 
 ```bash
-docker compose logs -f
+docker-compose logs -f
 ```
 
 - EPGStation: `http://<server>:8888/`
@@ -299,7 +323,7 @@ docker build \
 
 ```bash
 EPGSTATION_TEST_IMAGE=epgstation-v2:test \
-docker compose \
+docker-compose \
   -f docker-compose.test.yml \
   up -d
 ```
@@ -307,7 +331,7 @@ docker compose \
 状態確認:
 
 ```bash
-docker compose -f docker-compose.test.yml ps
+docker-compose -f docker-compose.test.yml ps
 ```
 
 テスト EPGStation は `http://<server>:18888/` でアクセスできます。本番の `:8888` と分離されているため同時起動できます。
@@ -315,7 +339,7 @@ docker compose -f docker-compose.test.yml ps
 ### テスト環境の停止
 
 ```bash
-docker compose -f docker-compose.test.yml down
+docker-compose -f docker-compose.test.yml down
 ```
 
 通常の `down` では `epgstation-test-mysql-db` は削除されないため、再起動後もテスト DB を継続利用できます。
@@ -325,7 +349,7 @@ docker compose -f docker-compose.test.yml down
 完全に作り直す場合のみ、テスト環境停止後に専用 Volume を削除・再作成します。
 
 ```bash
-docker compose -f docker-compose.test.yml down
+docker-compose -f docker-compose.test.yml down
 docker volume rm epgstation-test-mysql-db
 docker volume create epgstation-test-mysql-db
 ```
