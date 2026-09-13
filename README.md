@@ -104,6 +104,21 @@ Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`
 - 録画: `/media/tv_record`
 - TS Repair 作業領域: `/mnt/hdd1/ts-repair-work/epgstation-runtime`
 
+実機では `/media/tv_record` 自体を録画用 HDD のマウントポイントにはせず、録画用 HDD `/dev/sda1` を `/mnt/hdd1` にマウントし、その配下の `/mnt/hdd1/record/` を録画データの実体保存先としています。`/media/tv_record` はそこを指すシンボリックリンクです。
+
+```text
+/dev/sda1 (ext4 / 7.3 TB)
+└── /mnt/hdd1/
+    └── record/
+         ↑
+         └── /media/tv_record -> /mnt/hdd1/record/
+```
+
+したがって、Docker Compose や EPGStation からは `/media/tv_record` という固定パスを利用しつつ、実データは大容量 HDD 上の `/mnt/hdd1/record/` に保存されます。この構成により、将来ストレージ構成を変更する場合でも、アプリケーション側のパスを変更せずシンボリックリンクの参照先で吸収しやすくしています。
+
+> [!IMPORTANT]
+> `/media/tv_record` は `/mnt/hdd1/record/` へのシンボリックリンクであるため、Docker / EPGStation を起動する前に `/dev/sda1` が `/mnt/hdd1` へ正しくマウントされていることを確認してください。録画用 HDD が未マウントの状態で運用すると、意図しないファイルシステムへの書き込みや容量枯渇につながる可能性があります。
+
 別環境で利用する場合は `docker-compose.yml` / `docker-compose.test.yml` のマウント先を変更してください。
 
 ## 動作確認済み環境
@@ -133,6 +148,7 @@ Docker イメージには `i965-va-driver-shaders`、`intel-media-va-driver`、`
 | Tuner devices | `/dev/px4video0` ～ `/dev/px4video7` |
 | System filesystem | `/dev/mmcblk1p2` / ext4 / 56 GB |
 | Recording / work filesystem | `/dev/sda1` / ext4 / 7.3 TB (`/mnt/hdd1`) |
+| Recording path | `/media/tv_record` → `/mnt/hdd1/record/` (symlink) |
 | CM Analyzer | JoinLogoScpTrialSetLinux + patches + genlogo |
 
 > [!NOTE]
@@ -240,70 +256,59 @@ flowchart TB
         NEXT[次フレーム]
         FWD[秒送り]
     end
-    subgraph LIST[チャプター一覧]
-        C1[本編区間]
-        C2[CM 区間]
-        C3[本編区間]
-        C4[CM 区間]
+    subgraph CHAPTERS[チャプター一覧]
+        C1[本編]
+        C2[CM]
+        C3[本編]
+        C4[CM]
     end
-    EDIT[現在位置を基準に境界を補正]
-    SAVE[編集結果を保存]
+    SET[現在位置を境界へ反映]
+    SAVE[編集内容を保存]
     VIDEO --> SEEK
-    SEEK --> LIST
-    LIST --> EDIT
-    EDIT --> SAVE
+    SEEK --> CHAPTERS
+    CHAPTERS --> SET
+    SET --> SAVE
 ```
 
 ### 基本操作
 
 ```mermaid
 flowchart TD
-    A[録画番組を開く]
-    B[チャプター編集を開く]
-    C[修正したい境界を選ぶ]
-    D[プレビューで境界付近を確認]
-    E[秒単位で付近まで移動]
-    F[フレーム送り / 戻しで微調整]
-    G[境界位置を補正]
-    H{他にも修正する?}
-    I[編集結果を保存]
-    A --> B --> C --> D --> E --> F --> G --> H
-    H -->|はい| C
-    H -->|いいえ| I
+    A[録画番組を開く] --> B[チャプター編集を開く]
+    B --> C[修正する境界を選択]
+    C --> D[秒送り / 戻しで境界付近へ移動]
+    D --> E[フレーム送り / 戻しで位置を確認]
+    E --> F[現在位置を境界として設定]
+    F --> G{他の境界も修正する?}
+    G -->|はい| C
+    G -->|いいえ| H[編集結果を保存]
 ```
 
-CM 開始・終了位置を正確に合わせる場合は、最初からフレーム単位で長距離を移動するのではなく、まず秒単位の操作で境界付近まで移動し、その後フレーム送り / 戻しで位置を絞り込むのが基本です。
+CM 開始・終了位置を厳密に合わせる場合は、まず秒単位で境界付近へ移動し、その後フレーム単位で映像を確認して境界を決定します。フレーム番号だけでなく、プレビュー映像を確認しながら調整することを前提としています。
 
-### 自動解析と手動補正
+### 自動解析との関係
 
 ```mermaid
 flowchart LR
     REC[録画完了] --> ANA[CM Analyzer]
     ANA --> AUTO[自動チャプター生成]
     AUTO --> CHECK[EPGStation で確認]
-    CHECK --> NEED{補正が必要?}
+    CHECK --> NEED{修正が必要?}
     NEED -->|いいえ| USE[そのまま利用]
-    NEED -->|はい| MANUAL[手動チャプター編集]
-    MANUAL --> SAVE[保存]
+    NEED -->|はい| EDIT[手動チャプター編集]
+    EDIT --> SAVE[保存]
     SAVE --> USE
-    USE --> PLAY[CM スキップ]
-    USE --> ENC[CM 対応エンコード]
+    USE --> SKIP[CMスキップ]
+    USE --> CUT[CM区間を考慮したエンコード]
 ```
 
-チャプター編集は CM Analyzer を置き換える機能ではなく、**自動解析結果を人間が補正するための機能**です。通常は自動解析結果を利用し、CM 境界のずれ、番組冒頭・末尾の誤判定、提供表示や番宣などを意図的に残したい場合に手動編集します。
-
-フレームプレビューは確認位置に応じて映像を取得するため、連続操作時にはプレビュー更新に時間がかかる場合があります。また、元の放送 TS に PTS / DTS の不整合や欠損がある場合は、境界編集以前に TS Repair が必要になることがあります。
+チャプター編集は自動 CM 解析を置き換えるものではなく、**自動解析結果を人間が必要に応じて補正する機能**として位置付けています。
 
 ## 本番環境の起動
 
 ```bash
 docker-compose up -d
 docker-compose ps
-```
-
-ログ確認:
-
-```bash
 docker-compose logs -f
 ```
 
@@ -312,150 +317,110 @@ docker-compose logs -f
 
 ## テスト環境
 
-本番へ変更を反映する前に確認できるよう、`docker-compose.test.yml` に独立した EPGStation テスト環境を用意しています。EPGStation、MariaDB、設定・データ、録画ファイル、サムネイル、ログ、CM Analyzer / CM 解析データは本番と分離し、Mirakurun は本番環境と共有します。
-
-```mermaid
-flowchart TD
-    Browser[Browser]
-    subgraph Production[本番環境]
-        MIR[Mirakurun<br/>:40772]
-    end
-    subgraph Test[テスト環境]
-        EPGT[EPGStation Test<br/>:18888]
-        DBT[(MariaDB Test<br/>mysql-epgstation-test)]
-        CMAT[CM Analyzer Test]
-    end
-    Browser -->|HTTP :18888| EPGT
-    EPGT --> DBT
-    EPGT -->|Mirakurun 共用| MIR
-    EPGT -->|CM解析要求| CMAT
-    CMAT -->|解析結果| EPGT
-```
-
-テスト用設定は `epgstation/test-env/config/` に Git 管理されているため、初回起動時に本番設定をコピーする必要はありません。
-
-### テスト用イメージのビルド
-
-```bash
-docker build \
-  -f epgstation/ffmpeg7-ts-repair.Dockerfile \
-  -t epgstation-v2:test \
-  epgstation
-```
-
-### テスト環境の起動
-
-```bash
-EPGSTATION_TEST_IMAGE=epgstation-v2:test \
-  docker-compose -f docker-compose.test.yml up -d
-```
-
-テスト環境は `http://<server>:18888/` で確認します。
-
-> [!WARNING]
-> テスト DB を初期化する操作は保存データを削除します。必要なデータがないことを確認してから実施してください。通常の起動・再起動では DB の初期化は不要です。
-
-## 開発・テスト・本番反映
+本番へ変更を反映する前に確認できるよう、`docker-compose.test.yml` に独立した EPGStation テスト環境を用意しています。本番 Mirakurun は共有し、EPGStation / MariaDB / CM Analyzer はテスト用として分離します。
 
 ```mermaid
 flowchart LR
-    A[EPGStation<br/>ソース変更]
-    B[Docker Image<br/>Build]
-    C[テスト環境へ投入]
-    D[18888 で動作確認]
-    E{問題あり?}
-    F[修正]
-    G[本番用 Image 作成]
-    H[docker-compose.yml<br/>Image Tag 更新]
-    I[本番反映]
-    A --> B --> C --> D --> E
-    E -->|Yes| F --> B
-    E -->|No| G --> H --> I
+    MIR[本番 Mirakurun]
+    subgraph TEST[テスト環境]
+        EPGT[EPGStation<br/>:18888]
+        DBT[(MariaDB Test)]
+        CMAT[CM Analyzer Test]
+    end
+    MIR --> EPGT
+    EPGT --> DBT
+    EPGT --> CMAT
 ```
 
-本番へ直接変更を入れるのではなく、原則としてテスト環境で確認してから本番へ反映します。
-
-## ディスク容量について
-
-録画サーバーでは、録画データだけでなくエンコード中間ファイル、TS Repair 作業ファイル、Docker イメージ / build cache / overlay2 なども容量を消費します。
+テスト設定は `epgstation/test-env/config/` に Git 管理されています。テスト DB は外部 Docker Volume `epgstation-test-mysql-db` を使用するため、初回のみ作成します。
 
 ```bash
-df -h
+docker volume create epgstation-test-mysql-db
+```
+
+起動例:
+
+```bash
+EPGSTATION_TEST_IMAGE=epgstation-v2:test \
+docker-compose -f docker-compose.test.yml up -d
+
+docker-compose -f docker-compose.test.yml ps
+```
+
+停止:
+
+```bash
+docker-compose -f docker-compose.test.yml down
+```
+
+## ディスク容量に関する注意
+
+録画、エンコード、TS Repair、CM Analyzer、Docker イメージビルドでは一時的に大きなディスク領域を使用することがあります。特にシステム領域の Docker `overlay2`、`/tmp`、TS Repair 作業領域、録画 HDD の空き容量に注意してください。
+
+```bash
+df -h / /mnt/hdd1
 docker system df
 ```
 
-特に `/`、`/var/lib/docker`、`/media/tv_record`、`/mnt/hdd1` の空き容量を確認してください。`docker system prune` などの削除操作は、必要なイメージ・キャッシュ・コンテナを消す可能性があるため、内容を確認せず実行しないでください。
+不要な Docker イメージや録画データを自動的に削除する運用にはしていません。削除を伴うメンテナンスは、対象を確認してから手動で行うことを推奨します。
 
 ## 利用・参照した OSS と謝辞
 
-本プロジェクトは、多くのオープンソースソフトウェア、ライブラリ、先行プロジェクトの成果を利用・参考にして構築しています。これらを開発・公開し、長年にわたり維持されている開発者・コントリビューターの皆様に深く感謝いたします。
+本プロジェクトは、多くのオープンソースソフトウェア、ライブラリ、先行プロジェクトの成果を利用・参考にして構築しています。これらを開発・公開し、継続的にメンテナンスされている開発者・コントリビューターの皆様に深く感謝いたします。
 
 ### EPGStation
 
 - Project: [l3tnun/EPGStation](https://github.com/l3tnun/EPGStation)
 - License: MIT License
-- 利用箇所: 録画管理、番組管理、Web UI、ストリーミング、および本リポジトリ独自機能の実装基盤
+- 本プロジェクトでは EPGStation 2.6.20 を録画管理、番組管理、Web UI、ストリーミング、および独自機能追加の基盤として使用しています。
 
-本プロジェクトの中心となる録画管理システムは EPGStation 2.6.20 を基盤としています。優れた録画管理ソフトウェアを公開されている l3tnun 氏、および EPGStation の開発に携わるすべてのコントリビューターの皆様に深く感謝いたします。
+優れた録画管理ソフトウェアを公開されている l3tnun 氏、および EPGStation の開発に携わるコントリビューターの皆様に深く感謝いたします。
 
 ### Mirakurun
 
 - Project: [Chinachu/Mirakurun](https://github.com/Chinachu/Mirakurun)
 - License: Apache License 2.0
-- 利用箇所: Linux 上のテレビチューナー管理、MPEG-TS ストリームおよび番組情報の提供
+- チューナー管理、MPEG-TS ストリーム、番組情報の提供に使用しています。
 
-チューナーデバイスと録画管理アプリケーションを分離できる基盤を提供されている Chinachu Project およびコントリビューターの皆様に深く感謝いたします。
+Mirakurun を開発・公開されている Chinachu Project およびコントリビューターの皆様に深く感謝いたします。
 
 ### JoinLogoScpTrialSetLinux
 
 - Project: [tobitti0/JoinLogoScpTrialSetLinux](https://github.com/tobitti0/JoinLogoScpTrialSetLinux)
-- 利用箇所: CM Analyzer の解析基盤、`chapter_exe`、`logoframe`、`join_logo_scp`、ロゴ検出、チャプター / CM 区間解析
+- CM Analyzer の解析基盤として `chapter_exe`、`logoframe`、`join_logo_scp` などを利用しています。
+- 本プロジェクトでは独自パッチおよび `genlogo` 等の補助機能を追加しています。
 
-本プロジェクトでは JoinLogoScpTrialSetLinux を基盤に、Linux / Docker 環境での運用に合わせた独自パッチや処理を追加しています。また `.lgd` ロゴデータ生成のための独自 `genlogo` も組み込んでいます。
-
-JoinLogoScp と、その成果を Linux 環境へ移植・統合してきた開発者・コントリビューターの皆様に深く感謝いたします。含まれる各コンポーネントの著作権・ライセンスについては、それぞれの配布元の表記を参照してください。
+JoinLogoScp および Linux 環境への移植・統合に携わってきた開発者の皆様に深く感謝いたします。各コンポーネントの著作権・ライセンスについては、それぞれの配布元の表記も参照してください。
 
 ### FFmpeg
 
 - Project: [FFmpeg](https://ffmpeg.org/)
 - Version: 7.0.2
-- License: LGPL / GPL（有効化する機能・ビルド構成による）
-- 利用箇所: エンコード、VAAPI、ストリーミング、フレームプレビュー、CM カット、TS 解析、TS Repair 関連処理
+- License: LGPL 2.1+ / GPL 2+（ビルド構成による）
+- エンコード、VAAPI、ストリーミング、フレームプレビュー、CM カット、TS 解析・修復処理に使用しています。
 
-本プロジェクトでは FFmpeg 7.0.2 をソースからビルドし、VAAPI および放送 TS を扱うための機能と独自パッチを組み込んでいます。強力なマルチメディア基盤を長年開発・維持している FFmpeg Project およびコントリビューターの皆様に深く感謝いたします。
+長年にわたり強力なマルチメディア基盤を開発・維持している FFmpeg Project およびコントリビューターの皆様に深く感謝いたします。
 
 ### px4_drv
 
 - Project: [nns779/px4_drv](https://github.com/nns779/px4_drv)
-- 実機利用バージョン: 0.4.2 / DKMS
-- 利用箇所: PLEX PX-Q3U4 を Linux から `/dev/px4video*` として利用
+- PLEX PX-Q3U4 を Linux 上で利用するために使用しています。
+- 実機では 0.4.2 を DKMS で導入しています。
 
-PLEX 製チューナーを Linux 環境で利用可能にするドライバを開発・公開されている nns779 氏および関連する開発者の皆様に深く感謝いたします。
+PLEX 製チューナーを Linux 環境で利用可能にするドライバを開発・公開されている皆様に感謝いたします。
 
 ### Mermaid
 
 - Project: [mermaid-js/mermaid](https://github.com/mermaid-js/mermaid)
 - License: MIT License
-- 利用箇所: 本 README のシステム構成図、処理フロー、チャプター編集画面・操作概念図
+- README のシステム構成図、処理フロー、チャプター編集の画面・操作概念図に使用しています。
 
-テキストとして管理でき、Git と相性のよいダイアグラム環境を提供している Mermaid Project およびコントリビューターの皆様に感謝いたします。
+テキストとして管理可能な優れたダイアグラム環境を提供している Mermaid Project およびコントリビューターの皆様に感謝いたします。
 
-### その他の OSS
+### その他
 
-このほか、Node.js、Docker、MariaDB、AviSynth+、libva、x264、x265、libaribb24 など、多数の OSS / ライブラリを直接または Docker イメージのビルド過程で利用しています。
+本プロジェクトは Node.js、Docker、MariaDB、AviSynth+ をはじめとする多数の OSS とライブラリの上に成り立っています。また、日本のデジタル放送を Linux 上で扱うためのチューナードライバ、ARIB 関連ライブラリ、MPEG-TS 解析技術、録画・CM 解析ツールなど、長年にわたり公開されてきた技術的成果を利用しています。
 
-各ソフトウェアの著作権はそれぞれの著作権者に帰属します。利用・再配布時には、本リポジトリだけでなく各ソフトウェア・ライブラリのライセンス条件を確認してください。
+これらのソフトウェア、ライブラリ、技術情報を公開されているすべての開発者・コントリビューターの皆様に感謝いたします。本リポジトリで独自に実装した機能も、これらの先行プロジェクトと公開された技術的成果なしには実現できませんでした。
 
-## 謝辞
-
-本リポジトリで追加した CM 自動解析、チャプター編集、CM スキップ、CM 対応エンコード、TS Repair、実況連携などの機能も、上記の先行プロジェクトと、日本のデジタル放送を Linux 環境で扱うために長年蓄積・公開されてきた技術的成果の上に成り立っています。
-
-ソフトウェア、ライブラリ、ドライバ、技術情報を公開してくださったすべての開発者・コントリビューター・コミュニティの皆様に感謝いたします。
-
-## 関連プロジェクト
-
-- [EPGStation](https://github.com/l3tnun/EPGStation)
-- [Mirakurun](https://github.com/Chinachu/Mirakurun)
-- [FFmpeg](https://ffmpeg.org/)
-- [JoinLogoScpTrialSetLinux](https://github.com/tobitti0/JoinLogoScpTrialSetLinux)
-- [px4_drv](https://github.com/nns779/px4_drv)
+各ソフトウェアの著作権はそれぞれの著作権者に帰属します。利用・再配布にあたっては、本リポジトリだけでなく各ソフトウェア・ライブラリのライセンス条件も確認してください。
